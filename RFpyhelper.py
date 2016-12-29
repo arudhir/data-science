@@ -14,12 +14,34 @@ from sklearn import svm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import RandomForestRegressor
 from scipy.interpolate import CubicSpline
+from sklearn.metrics import confusion_matrix
 from IPython.display import display, HTML
 from collections import namedtuple
 pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
 warnings.filterwarnings('ignore')
+
+'''Makes n confusion matrices and generates statistics corresponding to the true/false pos/negs
+param: n_est (number of estimators for the randomforest), n_mat (number of matrices)
+return: a tuple of statistics for each element of the confusion matrix'''
+def confusionMatrixStatistics(forest, xy, n_mat):
+
+    X = xy[0]
+    y = xy[1]["PROGRESSED"]
+    confusion_mat_arr = [confusion_matrix(y, forest.predict(X)) for x in range(n_mat)]
+
+    true_neg = [confusion_matrix_arr[i][0][0] for i in range(n_mat)]
+    false_neg = [confusion_matrix_arr[i][1][0] for i in range(n_mat)]
+    true_pos = [confusion_matrix_arr[i][1][1] for i in range(n_mat)]
+    false_pos = [confusion_matrix_arr[i][0][1] for i in range(n_mat)]
+
+    ret_tneg = sp.stats.describe(true_neg)
+    ret_fneg = sp.stats.describe(false_neg)
+    ret_tpos = sp.stats.describe(true_pos)
+    ret_fpos = sp.stats.describe(false_pos)
+
+    return (ret_tneg, ret_fneg, ret_tpos, ret_fpos)
 
 '''Prints and returns ranked features'''
 def rankFeatures(forest, features):

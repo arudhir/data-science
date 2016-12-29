@@ -69,6 +69,9 @@ forest_clss_exp.predict_proba(X_cv)
 forest_clss_exp.predict_proba(X_cv)
 
 
+forest_clss_exp == classificationForest(train_data, data_norm.truth, 10)
+
+
 
 
 # %% Confusion Matrix
@@ -79,12 +82,18 @@ confusion_matrix(y_cv, y_pred)
 
 confusion_matrix_arr = [confusion_matrix(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv)) for x in range(20)]
 
+confusion_matrix_arr = [confusion_matrix(y_cv, forest_clss_exp.predict(X_cv)) for x in range(20)]
+
+
 true_neg = [confusion_matrix_arr[i][0][0] for i in range(20)]
 false_neg = [confusion_matrix_arr[i][1][0] for i in range(20)]
 true_pos = [confusion_matrix_arr[i][1][1] for i in range(20)]
 false_pos = [confusion_matrix_arr[i][0][1] for i in range(20)]
 
-np.stats.describe(true_neg)
+sp.stats.describe(true_neg)
+sp.stats.describe(false_neg)
+sp.stats.describe(true_pos)
+sp.stats.describe(false_)
 
 
 for i in range(len(confusion_matrix_arr)):
