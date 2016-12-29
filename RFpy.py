@@ -28,8 +28,6 @@ warnings.filterwarnings('ignore')
 # Set up data
 data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "groundtruth_example.csv")
 
-data_init.exp.shape
-
 data_filt = geneDataFilter(data_init)
 
 data_clean = cleanData(data_filt)
