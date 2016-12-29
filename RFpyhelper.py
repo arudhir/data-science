@@ -5,13 +5,14 @@ import scipy as sp
 import rpy2.robjects as robjects
 import warnings
 import sklearn
-from RFpyhelper import *
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import normalize
 from sklearn import svm
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
 from scipy.interpolate import CubicSpline
 from IPython.display import display, HTML
 from collections import namedtuple
@@ -19,6 +20,34 @@ pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
 warnings.filterwarnings('ignore')
+
+'''Prints and returns ranked features'''
+def rankFeatures(forest, features):
+    importances = forest.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in forest], axis=0)
+    indices = np.argsort(importances)[::-1]
+    for f in range(features.shape[1]):
+        print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
+    return indices
+
+'''Returns a forest of trees (classification). d = data tuple, n = number of estimators'''
+def classificationForest(features, labels, n):
+    training_val = alignData(features, labels)
+    forest = RandomForestClassifier(n_estimators=n)
+    X = training_val[0]
+    y = training_val[1]["PROGRESSED"]
+    ret = forest.fit(X, y)
+    return ret
+
+'''Returns a forest of trees (regression -- explicitly coded for TO values)'''
+def regressionForest(features, labels, n):
+    training_val = alignData(features, labels)
+    forest = RandomForestRegressor(n_estimators=n)
+    X = training_val[0]
+    y = training_val[1]["TO"]
+    ret = forest.fit(X, y)
+    return ret
+
 
 '''Takes two DataFrames and returns two versions of those DataFrames (tuple) but with the same rows in each'''
 def alignData(df1, df2):
@@ -89,7 +118,8 @@ def geneDataFilter(d):
     return ret_data
 
 # %%
-'''Reads the csv files and returns it in a namedtuple called Data for readability'''
+'''Reads the csv files and returns it in a namedtuple called Data for readability
+TODO: ADD MUTATION CSV'''
 def readFiles(exp, copy, truth):
     Data = namedtuple('Data', 'exp copy truth', verbose=False)
 
