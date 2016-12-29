@@ -109,6 +109,7 @@ def normWithNan(v):
 def cleanData(d):
     temp_exp = d.exp.dropna(axis=0, how='all')
     temp_copy = d.copy.dropna(axis=0, how='all')
+
     temp_truth = d.truth.dropna(axis=0, how='all')
 
     temp_truth.insert(len(temp_truth.columns), "PROGRESSED", 0)
@@ -124,6 +125,8 @@ def geneDataFilter(d):
     ffun = robjects.r("filterfun(cv(a = 0.7, b = 10))")
 
     # Transpose because I think genefilter wants genes in rows
+
+
     exp_temp = pd.DataFrame.transpose(d.exp)
     copy_temp = pd.DataFrame.transpose(d.copy)
 
@@ -143,12 +146,14 @@ def geneDataFilter(d):
 # %%
 '''Reads the csv files and returns it in a namedtuple called Data for readability
 TODO: ADD MUTATION CSV'''
-def readFiles(exp, copy, truth):
+def
+readFiles(exp, copy, truth):
     Data = namedtuple('Data', 'exp copy truth', verbose=False)
 
     exp_csv = pd.read_csv(exp)
     copy_csv = pd.read_csv(copy)
     truth_csv = pd.read_csv(truth)
+
 
     ret_data = Data(exp_csv, copy_csv, truth_csv)
 

@@ -15,10 +15,14 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import normalize
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import confusion_matrix, roc_curve
+from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
+from lifelines import KaplanMeierFitter
+from lifelines.utils import datetimes_to_durations, survival_table_from_events
+from lifelines import AalenAdditiveFitter, CoxPHFitter
 from scipy.interpolate import CubicSpline
 from IPython.display import display, HTML
 from collections import namedtuple
+%matplotlib inline
 pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
@@ -30,11 +34,9 @@ data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "grou
 data_filt = geneDataFilter(data_init)
 data_clean = cleanData(data_filt)
 data_norm = normalizeData(data_clean)
-
 data_norm.exp.index = data_clean.exp.index # Somewhere the indices got messed up
 data_norm.copy.index = data_clean.copy.index # But data_norm.truth is fine it seems
 data_norm.truth.index = data_norm.truth.index + 1 # Since this started indexing at 0
-
 # %%
 # training a random forest classifier
 # http://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-7-3
@@ -56,3 +58,20 @@ y_cv = xy_cv[1]["PROGRESSED"]
 confusion_matrices = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[0]
 confusion_results = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[1]
 confusion_statistics = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[2]
+
+
+# %% ROC AUC score
+# TODO: http://scikit-learn.org/stable/auto_examples/model_selection/plot_roc.html#sphx-glr-auto-examples-model-selection-plot-roc-py
+sklearn.metrics.roc_auc_score(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
+sklearn.metrics.roc_curve(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
+
+# %% Kaplan-Meier Survival Analysis
+kmf = KaplanMeierFitter()
+
+T = data_norm.truth["TO"]
+E = data_norm.truth["PROGRESSED"]
+
+kmf.fit(T, E) # Not sure if we should use the original/train/or CV data
+kmf.survival_function_
+kmf.median_
+kmf.plot()
