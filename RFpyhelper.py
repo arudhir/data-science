@@ -25,11 +25,12 @@ warnings.filterwarnings('ignore')
 '''Makes n confusion matrices and generates statistics corresponding to the true/false pos/negs
 param: n_est (number of estimators for the randomforest), n_mat (number of matrices)
 return: a tuple of statistics for each element of the confusion matrix'''
-def confusionMatrixStatistics(forest, xy, n_mat):
+def confusionMatrixStatistics(train_data, truth_data, num_est, xy_cv, n_mat):
 
-    X = xy[0]
-    y = xy[1]["PROGRESSED"]
-    confusion_mat_arr = [confusion_matrix(y, forest.predict(X)) for x in range(n_mat)]
+    X= xy_cv[0]
+    y = xy_cv[1]["PROGRESSED"]
+
+    confusion_matrix_arr = [confusion_matrix(y, classificationForest(train_data, data_norm.truth, num_est).predict(X)) for x in range(n_mat)]
 
     true_neg = [confusion_matrix_arr[i][0][0] for i in range(n_mat)]
     false_neg = [confusion_matrix_arr[i][1][0] for i in range(n_mat)]
@@ -41,7 +42,7 @@ def confusionMatrixStatistics(forest, xy, n_mat):
     ret_tpos = sp.stats.describe(true_pos)
     ret_fpos = sp.stats.describe(false_pos)
 
-    return (ret_tneg, ret_fneg, ret_tpos, ret_fpos)
+    return (confusion_matrix_arr, (true_neg, false_neg, true_pos, false_pos), (ret_tneg, ret_fneg, ret_tpos, ret_fpos))
 
 '''Prints and returns ranked features'''
 def rankFeatures(forest, features):
