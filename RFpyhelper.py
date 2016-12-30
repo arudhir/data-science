@@ -5,6 +5,7 @@ import scipy as sp
 import rpy2.robjects as robjects
 import warnings
 import sklearn
+from copy import deepcopy
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
@@ -21,6 +22,30 @@ pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
 warnings.filterwarnings('ignore')
+
+''' Returns how many elements in common a bicluster has with the list of progressed patients
+does not return the bicluster with the most matches because there is no penalty for wrong answers
+TODO: maybe combine with another algorithm '''
+def biclusterCommon(clusters, progList):
+    # max_val = -1
+    # cluster_num = -1
+    ret = []
+    for i in range(clusters.n_clusters):
+        n = np.sum((np.in1d(p, clusters.get_indices(i)[0])).astype(int))
+        ret.append(n)
+        #print(n)
+        # if (max_val < n):
+        #     max_val = n
+        #     cluster_num = i
+    return ret
+
+''' Returns a data series of patients that have progressed (+1 to fix index)'''
+def progressedList(data):
+    ret = []
+    for i in data.index: # remember series are label indexed; our labels are numbers, so this can be confusing
+        if (data[i]):
+            ret.append(i+1) # Fix indicing at 0
+    return pd.Series(ret)
 
 '''Makes n confusion matrices and generates statistics corresponding to the true/false pos/negs
 param: n_est (number of estimators for the randomforest), n_mat (number of matrices)
@@ -80,6 +105,8 @@ def alignData(df1, df2):
         return (ret1, ret2)
 # %%
 def normalizeData(d):
+
+
     temp_exp = pd.DataFrame(sklearn.preprocessing.normalize(d.exp))
     temp_copy = pd.DataFrame(sklearn.preprocessing.normalize(d.copy))
 

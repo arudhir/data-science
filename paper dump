@@ -1,0 +1,39 @@
+Links
+
+Biclustering
+========================
+Quality measures for gene expression biclusters (2015)
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4357449/
+
+Biclustering sparse binary genomic data (2008)
+https://www.ncbi.nlm.nih.gov/pubmed/19040367
+
+UniBic: Sequential row-based biclustering algorithm for analysis of
+gene expression data (2016)
+http://www.nature.com/articles/srep23466#supplementary-information
+
+Biclustering of Expression Data (2000)
+ftp://cups.sdsc.edu/pub/sdsc/biology/ISMB00/157.pdf
+
+
+Actually Relevant to Project
+========================
+Cancer progression modeling using static sample data (2014)
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4196119/
+
+High-dimensional Regression in Cancer Genomics
+http://www2.stat.duke.edu/~mw/.downloads/sss-isbabull06.pdf
+
+Genome-wide Cox Regression in R
+https://www.biostars.org/p/118401/
+
+Survival analysis tools in genomics research
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4246473/
+
+Partial least squares Cox regression for genome-wide data.
+https://www.ncbi.nlm.nih.gov/pubmed/18188699
+
+Packages
+========================
+pcaMethods (R)
+https://www.bioconductor.org/packages/devel/bioc/manuals/pcaMethods/man/pcaMethods.pdf

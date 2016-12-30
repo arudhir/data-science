@@ -7,6 +7,7 @@ import rpy2.robjects as robjects
 import warnings
 import sklearn
 import matplotlib.pyplot as plt
+import lifelines
 from RFpyhelper import *
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
@@ -16,27 +17,31 @@ from sklearn.preprocessing import normalize
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
-from lifelines import KaplanMeierFitter
+from sklearn.manifold import Isomap
+from sklearn.cluster.bicluster import SpectralCoclustering
 from lifelines.utils import datetimes_to_durations, survival_table_from_events
-from lifelines import AalenAdditiveFitter, CoxPHFitter
+from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
+from lifelines.statistics import logrank_test
 from scipy.interpolate import CubicSpline
 from IPython.display import display, HTML
 from collections import namedtuple
 %matplotlib inline
+warnings.filterwarnings('ignore')
 pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
-warnings.filterwarnings('ignore')
+pcaMethods = importr("pcaMethods") # not used yet; $ conda install bioconductor-pcamethods
 
 # %%
 # Set up data
 data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "groundtruth_example.csv")
 data_filt = geneDataFilter(data_init)
 data_clean = cleanData(data_filt)
-data_norm = normalizeData(data_clean)
+data_norm = normalizeData(data_clean) # whenever data_norm is changed, data_clean is also, idk whats going on
 data_norm.exp.index = data_clean.exp.index # Somewhere the indices got messed up
 data_norm.copy.index = data_clean.copy.index # But data_norm.truth is fine it seems
 data_norm.truth.index = data_norm.truth.index + 1 # Since this started indexing at 0
+
 # %%
 # training a random forest classifier
 # http://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-7-3
@@ -65,13 +70,51 @@ confusion_statistics = confusionMatrixStatistics(train_data, data_norm.truth, 10
 sklearn.metrics.roc_auc_score(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
 sklearn.metrics.roc_curve(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
 
-# %% Kaplan-Meier Survival Analysis
+# %% Hazard and Survival Functions
+# https://lifelines.readthedocs.io/en/latest/
+orig_truth_clean = cleanData(data_filt).truth # Non-normalized data just bc idk what normalizing does to KM graphs
+T = orig_truth_clean["TP"]
+C = orig_truth_clean["PROGRESSED"]
+
+# Survival Function
 kmf = KaplanMeierFitter()
+# Get the event times for each sample
+#orig_truth_clean.insert(len(orig_truth_clean.columns), "EVENT_TIMES", 0)
+#orig_truth_clean["EVENT_TIMES"] = orig_truth_clean["TO"].subtract(orig_truth_clean["TP"], fill_value=0)
 
-T = data_norm.truth["TO"]
-E = data_norm.truth["PROGRESSED"]
-
-kmf.fit(T, E) # Not sure if we should use the original/train/or CV data
+kmf.fit(T, C) # Not sure if we should use the original/train/or CV data
 kmf.survival_function_
 kmf.median_
-kmf.plot()
+
+plt.title('Survival function of multiple myeloma patients', axes=kmf.plot()) # Plotted with confidence intervals
+
+
+# Cumulative Hazard Function
+naf = NelsonAalenFitter()
+naf.fit(T, event_observed=C)
+naf.plot()
+
+# %% Biclustering to get features
+# experimental
+clusters = sklearn.cluster.bicluster.SpectralCoclustering(n_clusters = 50)
+fitted_clusters = clusters.fit(data_norm.copy)
+pList = pd.DataFrame.as_matrix(progressedList(data_norm.truth["PROGRESSED"]))
+biclusterCommon(fitted_clusters, pList)[40]
+fitted_clusters.get_indices(40)[1]
+
+
+'''
+
+
+TODO:
+
+survival analysis
+=========================
+learn about survival analysis
+consider which model should be used for the function
+
+conceptual
+==========================
+figure out how to integrate different pieces of data
+
+'''
