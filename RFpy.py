@@ -92,7 +92,7 @@ plt.title('Survival function of multiple myeloma patients', axes=kmf.plot()) # P
 # Cumulative Hazard Function
 naf = NelsonAalenFitter()
 naf.fit(T, event_observed=C)
-naf.plot()
+plt.title('Hazard function of multiple myeloma patients', axes=naf.plot())
 
 # %% Biclustering to get features
 # experimental

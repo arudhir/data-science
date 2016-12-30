@@ -39,7 +39,7 @@ def biclusterCommon(clusters, progList):
         #     cluster_num = i
     return ret
 
-''' Returns a data series of patients that have progressed (+1 to fix index)'''
+''' Returns a data series of patients that have progressed'''
 def progressedList(data):
     ret = []
     for i in data.index: # remember series are label indexed; our labels are numbers, so this can be confusing
