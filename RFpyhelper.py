@@ -23,6 +23,7 @@ biocinstaller = importr("BiocInstaller")
 genefilter = importr("genefilter")
 warnings.filterwarnings('ignore')
 
+# %%
 ''' Returns how many elements in common a bicluster has with the list of progressed patients
 does not return the bicluster with the most matches because there is no penalty for wrong answers
 TODO: maybe combine with another algorithm '''
@@ -173,8 +174,7 @@ def geneDataFilter(d):
 # %%
 '''Reads the csv files and returns it in a namedtuple called Data for readability
 TODO: ADD MUTATION CSV'''
-def
-readFiles(exp, copy, truth):
+def readFiles(exp, copy, truth):
     Data = namedtuple('Data', 'exp copy truth', verbose=False)
 
     exp_csv = pd.read_csv(exp)
