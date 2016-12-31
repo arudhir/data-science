@@ -53,7 +53,9 @@ forest_clss_exp = classificationForest(train_data, data_norm.truth, 10)
 sklearn.ensemble.RandomForestClassifier.decision_path(data_norm.exp)
 forest_clss_exp.estimators_
 
-rankFeatures(forest_reg_exp, train_data)
+ranked_features = rankFeatures(forest_reg_exp, train_data)
+
+imp_features = ranked_features[0:113]
 
 # %%
 # cross validation, i.e., using the model we just trained
