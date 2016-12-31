@@ -173,8 +173,7 @@ def geneDataFilter(d):
 # %%
 '''Reads the csv files and returns it in a namedtuple called Data for readability
 TODO: ADD MUTATION CSV'''
-def
-readFiles(exp, copy, truth):
+def readFiles(exp, copy, truth):
     Data = namedtuple('Data', 'exp copy truth', verbose=False)
 
     exp_csv = pd.read_csv(exp)
