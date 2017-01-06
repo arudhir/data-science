@@ -1,3 +1,4 @@
+# %%
 import math
 import numpy as np
 import pandas as pd
@@ -174,19 +175,18 @@ def geneDataFilter(d):
     return ret_data
 
 # %%
-'''Reads the csv files and returns it in a namedtuple called Data for readability
-TODO: ADD MUTATION CSV'''
-def readFiles(exp, copy, truth):
+'''Reads the csv files and returns it in a namedtuple called Data for readability'''
+def readFiles(exp, copy, mut, truth):
 
     exp_csv = pd.read_csv(exp)
     copy_csv = pd.read_csv(copy)
     truth_csv = pd.read_csv(truth)
+    mut_csv = pd.read_csv(mut)
 
-
-    ret_data = Data(exp_csv, copy_csv, truth_csv)
+    ret_data = Data(exp_csv, copy_csv, mut_csv, truth_csv)
 
     return ret_data
 
 if __name__ == '__main__':
 
-    Data = namedtuple('Data', 'exp copy truth')
+    Data = namedtuple('Data', 'exp copy mut truth')

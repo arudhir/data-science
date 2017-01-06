@@ -6,13 +6,13 @@ import scipy as sp
 import sklearn as sk
 import rpy2.robjects as robjects
 import warnings
-import sklearn
 import matplotlib.pyplot as plt
 import lifelines
 from RFpyhelper import *
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
+from sklearn import linear_model
 from sklearn.preprocessing import MinMaxScaler, normalize
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
@@ -35,13 +35,40 @@ pcaMethods = importr("pcaMethods") # not used yet; $ conda install bioconductor-
 
 # %%
 # Set up data
-data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "groundtruth_example.csv")
+# BUG: The indices are fucked up at times -- make sure you run all the code in this block to avoid that!
+data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "mutations_example.csv", "groundtruth_example.csv")
 data_filt = geneDataFilter(data_init)
 data_clean = cleanData(data_filt)
 data_norm = normalizeData(data_clean) # whenever data_norm is changed, data_clean is also, idk whats going on
 data_norm.exp.index = data_clean.exp.index # Somewhere the indices got messed up
 data_norm.copy.index = data_clean.copy.index # But data_norm.truth is fine it seems
 data_norm.truth.index = data_norm.truth.index + 1 # Since this started indexing at 0
+
+
+''' Machine Learning Framework: http://blog.kaggle.com/2016/07/21/approaching-almost-any-machine-learning-problem-abhishek-thakur/ '''
+
+''' 1: Split data '''
+# %%
+
+mut_data = pd.read_csv("mutations_example.csv")
+#a = a.add_suffix('_mut')
+#b = b.add_suffix('_exp')
+
+
+x = pd.concat([a, b], axis=1)
+x
+
+
+#d = data_norm.truth.iloc[0:4, 0:3]
+#d.index = d.index + 1
+#d = pd.concat([d, d], axis=0, join='inner')
+d
+forest = classificationForest(x, d, 10)
+regforest = regressionForest(x, d, 10)
+#pd.DataFrame(forest.feature_importances_, x.columns.values)
+
+forest.feature_importances_
+regforest.feature_importances_
 
 # %%
 # training a random forest classifier
@@ -56,6 +83,17 @@ forest_clss_exp.estimators_
 ranked_features = rankFeatures(forest_reg_exp, train_data)
 
 imp_features = ranked_features[0:113]
+norm_exp_imp_features = data_norm.exp.iloc[:, imp_features]
+linear_model_data = alignData(norm_exp_imp_features, data_norm.truth)
+
+
+linear_model_data[1]
+
+linear_model = linear_model.Lasso(alpha=0.1)
+linear_model.fit(linear_model_data[0], linear_model_data[1]["PROGRESSED"])
+
+
+
 
 # %%
 # cross validation, i.e., using the model we just trained
