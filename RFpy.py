@@ -8,7 +8,6 @@ import rpy2.robjects as robjects
 import warnings
 import matplotlib.pyplot as plt
 import lifelines
-from RFpyhelper import *
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
@@ -34,246 +33,90 @@ genefilter = importr("genefilter")
 #pcaMethods = importr("pcaMethods") # not used yet; $ conda install bioconductor-pcamethods
 
 # %%
-''' First, get the data. Second, split it into training and validation sets'''
+'''
+A little bit of processing before the preprocessing. Create a namedtuple Data to organize csv data, add suffixes to distinguish features, and add the PROGRESSED label.
+'''
+Data = namedtuple('Data', 'exp cop mut labels')
+file1 = pd.read_csv("expressions_example.csv")
+file2 = pd.read_csv("copynumber_example.csv")
+file3 = pd.read_csv("mutations_example.csv")
+file4 = pd.read_csv("groundtruth_example.csv")
+Data_init = Data(file1, file2, file3, file4)
 
-data_init = readFiles("expressions_example.csv", "copynumber_example.csv", "mutations_example.csv", "groundtruth_example.csv")
+Data_suffix = addSuffixes(Data_init)
+addLabel(Data_suffix.labels, "PROGRESSED")
+nan_indices = Data_suffix.labels["TO"].index[Data_suffix.labels["TO"].apply(np.isnan)]
+Data_suffix.labels["PROGRESSED"] = ~Data_suffix.labels["TP"].isnull()
+Data_suffix.labels["PROGRESSED"].ix[nan_indices] = np.nan # Otherwise False shows up instead of NAN
 
 '''
-Current issue: Our groundtruth data is sparse — the most ideal way to proceed is by using semi-supervised learning. Liang et. al
-(2016) describe a method for cancer survival analysis using semi-supervised learning with quasinorm regularization.
-
-Q: Can we proceed using L_1 regularization? Or do we need to implement L_(1/2) regularization to follow the paper?
-Q: Given that there are no libraries for quasinorm regularization (presumably the coordinate descent algorithm needs to be
-modified as well) — is it feasible to write one? How would we test the package?
-Q: If we decide to go with L_1 for now, is the appropriate action to get rid of all absent patient data? Is this even worth doing
-given that we would drop 26 out of 332 entries (~7%)?
-    Suggested from #bioinformatics: Introduce a new label (is_unlabeled) and fit a model to that. If a predictive model is found (i.e., AUC > 0.8), then drop the features used to make that model (i.e., the features that are (loosely) 'unique' to the unlabeled, and then drop the unlabeled samples and go from there.
-
-Q: Where do control samples factor into this? Do I need to go out and find control examples? Should I?
-
-Model Selection: Selecting a statistical model from a set of candidate models, given data. In the context of machine learning, this is referred to as 'hyperparameter optimization', where the usual goal is to optimize a measure of the algorithm's performance on an independent dataset. We use _cross validation_ to estimate the generalization performance of this. This is different than actual learning problems, which optimize based on a loss function in order to learn parameters that model the input well, whereas hyperparameter optimization is to make sure the model doesn't overfit.
-
-Suggested from _10chik on #bioinformatics (freenode): Introduce a new label (is_unlabeled) and fit a model to that. If a predictive model is found (i.e., AUC > 0.8), then drop the features used to make that model (i.e., the features that are (loosely) 'unique' to the unlabeled, and then drop the unlabeled samples and go from there.
-    From here, would it then make sense to introduce the dropped features one by one to see how they impact the overall score?
-    What if the genes I drop are really important? I guess they'd be in the other patients too if they were THAT important
-
-
-
-
-1/7/16: Atom crashed, lost work on _10chik's solution. What was lost: data split, forest model creation, then making a mini test suite that returns results from roc_auc_score, f1_test, and confusion matrix — 10chik's solution does not work
-
-also lost work on the 2 percent variance in mutation deletion thing, but that also did not work
-
-todo: start cleaning up this motherfucker and find another way to do your work bc Atom keeps dicking you; maybe migrate to Jupyter proper, and combine code from RFpyhelper here perhaps? we'll do that if non-atom things also shit the bed
- '''
-
-# Create the "is_unlabeled" label
-data_init.truth.insert(len(data_init.truth.columns), "is_unlabeled", 0)
-data_init.truth["is_unlabeled"] = np.isnan(data_init.truth["TO"])
-
-temp1 = data_init.exp.add_suffix("_exp")
-temp2 = data_init.copy.add_suffix("_copy")
-temp3 = data_init.mut.add_suffix("_mut")
-
-# We need to impute the NaN values before concatenating
-imp = Imputer(missing_values='NaN', strategy='mean', axis=0)
-
-imp.fit(temp1)
-col_val = pd.Series(temp1.columns.values)
-temp1 = pd.DataFrame(imp.transform(temp1))
-temp1 = temp1.rename(columns=col_val)
-
-imp.fit(temp2)
-col_val = pd.Series(temp2.columns.values)
-temp2 = pd.DataFrame(imp.transform(temp2))
-temp2 = temp2.rename(columns=col_val)
-
-imp.fit(temp3)
-col_val = pd.Series(temp3.columns.values)
-temp3 = pd.DataFrame(imp.transform(temp3))
-temp3 = temp3.rename(columns=col_val)
-
-temp4 = pd.concat([temp1, temp2], axis=1)
-temp5 = pd.concat([temp4, temp3], axis=1)
-
-
-forest = RandomForestClassifier(n_estimators=1000)
-
-forfit = forest.fit(temp5, data_init.truth["is_unlabeled"])
-importances = forfit.feature_importances_
-std = np.std([tree.feature_importances_ for tree in forest.estimators_], axis=0)
-indices = np.argsort(importances)[::-1]
-
-print("Feature ranking:")
-
-for f in range(temp5.shape[1]):
-    print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
-
-
-
-np.savetxt('feature importances', forfit.feature_importances_)
-
-data_filt = geneDataFilter(data_init)
-data_clean = cleanData(data_filt)
-data_norm = normalizeData(data_clean) # whenever data_norm is changed, data_clean is also, idk whats going on
-data_norm.exp.index = data_clean.exp.index # Somewhere the indices got messed up
-data_norm.copy.index = data_clean.copy.index # But data_norm.truth is fine it seems
-data_norm.truth.index = data_norm.truth.index + 1 # Since this started indexing at 0
-
-
-''' Machine Learning Framework: http://blog.kaggle.com/2016/07/21/approaching-almost-any-machine-learning-problem-abhishek-thakur/ '''
-
-''' 1: Split data '''
-# %%
-
-mut_data = pd.read_csv("mutations_example.csv")
-#a = a.add_suffix('_mut')
-#b = b.add_suffix('_exp')
-
-
-x = pd.concat([a, b], axis=1)
-x
-
-
-#d = data_norm.truth.iloc[0:4, 0:3]
-#d.index = d.index + 1
-#d = pd.concat([d, d], axis=0, join='inner')
-d
-forest = classificationForest(x, d, 10)
-regforest = regressionForest(x, d, 10)
-#pd.DataFrame(forest.feature_importances_, x.columns.values)
-
-forest.feature_importances_
-regforest.feature_importances_
-
-# %%
-# training a random forest classifier
-# http://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-7-3
-train_data = data_norm.exp.sample(frac=0.5)
-forest_reg_exp = regressionForest(train_data, data_norm.truth, 10)
-forest_clss_exp = classificationForest(train_data, data_norm.truth, 10)
-
-sklearn.ensemble.RandomForestClassifier.decision_path(data_norm.exp)
-forest_clss_exp.estimators_
-
-ranked_features = rankFeatures(forest_reg_exp, train_data)
-
-imp_features = ranked_features[0:113]
-norm_exp_imp_features = data_norm.exp.iloc[:, imp_features]
-linear_model_data = alignData(norm_exp_imp_features, data_norm.truth)
-
-
-linear_model_data[1]
-
-linear_model = linear_model.Lasso(alpha=0.1)
-linear_model.fit(linear_model_data[0], linear_model_data[1]["PROGRESSED"])
-
-
-
-
-# %%
-# cross validation, i.e., using the model we just trained
-data_cv = data_norm.exp.sample(frac=0.25)
-xy_cv = alignData(data_cv, data_norm.truth)
-
-X_cv = xy_cv[0]
-y_cv = xy_cv[1]["PROGRESSED"]
-
-# %% Confusion Matrix
-classificationForest(train_data, data_norm.truth, num_est).predict(X)
-cv_confusion_matrix = confusion_matrix(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
-
-
-
-confusion_matrices = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[0]
-confusion_results = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[1]
-confusion_statistics = confusionMatrixStatistics(train_data, data_norm.truth, 10, xy_cv, 10)[2]
-
-
-# %% ROC AUC score
-# TODO: http://scikit-learn.org/stable/auto_examples/model_selection/plot_roc.html#sphx-glr-auto-examples-model-selection-plot-roc-py
-metrics.roc_auc_score(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
-fpr, tpr, thresholds = sklearn.metrics.roc_curve(y_cv, classificationForest(train_data, data_norm.truth, 10).predict(X_cv))
-fpr
-tpr
-thresholds
-# %% Hazard and Survival Functions
-# https://lifelines.readthedocs.io/en/latest/
-orig_truth_clean = cleanData(data_filt).truth # Non-normalized data just bc idk what normalizing does to KM graphs
-T = orig_truth_clean["TP"]
-C = orig_truth_clean["PROGRESSED"]
-
-# Survival Function
-# I think survival functions make the most sense in the context of having two (maybe more) different groups of things to plot; right now we only have one.
-# Example: Gene A is mutated in some, not mutated in others --> we can make a KM plot to see if the mutation (or lack thereof) leads to dec survival
-# Otherwise, rn, all we get is "survival decreases over time". no fucking shit.
-
-
-
-kmf = KaplanMeierFitter()
-# Get the event times for each sample
-#orig_truth_clean.insert(len(orig_truth_clean.columns), "EVENT_TIMES", 0)
-#orig_truth_clean["EVENT_TIMES"] = orig_truth_clean["TO"].subtract(orig_truth_clean["TP"], fill_value=0)
-
-kmf.fit(T, C) # Not sure if we should use the original/train/or CV data
-kmf.survival_function_
-kmf.median_
-
-plt.title('Survival function of multiple myeloma patients', axes=kmf.plot()) # Plotted with confidence intervals
-
-
-# Cumulative Hazard Function
-naf = NelsonAalenFitter()
-naf.fit(T, event_observed=C)
-plt.title('Hazard function of multiple myeloma patients', axes=naf.plot())
-
-# %% Survival regression
-
-# In order to do Cox regression we need to first find a way to create a covariance matrix with our high-dimensional feature space
-# Typical examples only have a reasonable (see: not 57000) features, and therefore it is trivial to write a linear regression model for those
-# Our relationships are probably more complex and definitely impossible to write out by hand
-
-# https://en.wikipedia.org/wiki/Proportional_hazards_model#Under_high-dimensional_setup
-
-
-# Therefore, the way to go is probably LASSO first
-
-# or do logistic regression and call it a fucking day
-
-# Idea: Group LASSO on the gene signature EMC-92 associated with multiple myeloma
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# %% Biclustering to get features
-# experimental
-clusters = sklearn.cluster.bicluster.SpectralCoclustering(n_clusters = 50)
-fitted_clusters = clusters.fit(data_norm.copy)
-pList = pd.DataFrame.as_matrix(progressedList(data_norm.truth["PROGRESSED"]))
-biclusterCommon(fitted_clusters, pList)[40]
-fitted_clusters.get_indices(40)[1]
-type(clusters)
-pd.DataFrame.as_matri
-# %%
-forest = RandomForestClassifier()
+Since sklearn cannot handle NaN values, new Data tuples will be made depending on the context. Afterwards, split the data into the training set, the cross validation set, and the test set in a 50/25/25 split.
+'''
+
+exp_impute = featureImputer('NaN', 'mean', 0, Data_suffix.exp)
+cop_impute = featureImputer('NaN', 'mean', 0, Data_suffix.cop)
+
+'''
+TODO: 1/8/17
+- Figure out how to impute a boolean matrix
+- Take some time to see if xgboost can deal with sparse matrices so you don't have to make questionable decisions with the data
+- Split the data
+- Stack features
+- Throw it all into a tree-based model to feature select
+- Make a ML model
+- Optimize hyperparameters with the CV set
+- Make some functions to visualize how good the ML model is — maybe learn seaborn or something.
+
+
+'''
 
 '''
 HELPER FUNCTIONS
 '''
+def featureImputer(mv, strat, ax, f):
+    '''
+    Imputes the NaN values for the feature set passed, transforms the dataframe, and makes sure the columns are what they ought to be.
 
+    Note: copy is explictly being set to False here — a copy will not be made.
+
+    Args:
+        mv (str): The type of feature Imputer finds.
+        strat (str): Strategy for Imputer.
+        ax: Axis for Imputer.
+        f (pd.DataFrame): A feature dataframe
+        *f_add: Any additional features.
+    Return:
+
+    '''
+    if f is None:
+        raise TypeError
+
+    imp = Imputer(missing_values=mv, strategy=strat, axis=ax)
+
+    col_val = pd.Series(f.columns.values)
+    f = pd.DataFrame(imp.fit_transform(f))
+    f = f.rename(columns=col_val)
+    return f
+def addSuffixes(d):
+    '''
+    Adds suffixes to our Data. Returns a completely new Data tuple.
+    '''
+    te = d.exp.add_suffix("_exp")
+    tc = d.cop.add_suffix("_copy")
+    tm = d.mut.add_suffix("_mut")
+    tl = d.labels.copy()
+    ret = Data(te, tc, tm, tl)
+    return ret
+def addLabel(self, new_label):
+    '''
+    Inserts a new label — modifies labels, does not create copy. Initializes to 0
+    Args:
+        pd.DataFrame of labels
+        str of the new label
+    Return:
+        None
+    '''
+    self.insert(len(self.columns), new_label, 0)
 def biclusterCommon(clusters, progList):
     '''
     Finds the elements that are the same between a bicluster and a list of progressed patients.
@@ -491,6 +334,8 @@ def geneDataFilter(d):
 def readFiles(exp, copy, mut, truth):
     '''
     Read in the initial csv files and return a namedtuple Data of the csv files.
+
+    TODO: Figure out why there is a positional argument issue with this; ret_data line sees 5 arguments. Suspecting "self" is the cause — but this worked fine in the past.
     '''
     exp_csv = pd.read_csv(exp)
     copy_csv = pd.read_csv(copy)
@@ -499,3 +344,54 @@ def readFiles(exp, copy, mut, truth):
     ret_data = Data(exp_csv, copy_csv, mut_csv, truth_csv)
 
     return ret_data
+
+'''
+NOTES AND RAMBLINGS
+'''
+
+'''
+Current issue: Our groundtruth data is sparse — the most ideal way to proceed is by using semi-supervised learning. Liang et. al
+(2016) describe a method for cancer survival analysis using semi-supervised learning with quasinorm regularization.
+
+Q: Can we proceed using L_1 regularization? Or do we need to implement L_(1/2) regularization to follow the paper?
+Q: Given that there are no libraries for quasinorm regularization (presumably the coordinate descent algorithm needs to be
+modified as well) — is it feasible to write one? How would we test the package?
+Q: If we decide to go with L_1 for now, is the appropriate action to get rid of all absent patient data? Is this even worth doing
+given that we would drop 26 out of 332 entries (~7%)?
+    Suggested from #bioinformatics: Introduce a new label (is_unlabeled) and fit a model to that. If a predictive model is found (i.e., AUC > 0.8), then drop the features used to make that model (i.e., the features that are (loosely) 'unique' to the unlabeled, and then drop the unlabeled samples and go from there.
+
+Q: Where do control samples factor into this? Do I need to go out and find control examples? Should I?
+
+Model Selection: Selecting a statistical model from a set of candidate models, given data. In the context of machine learning, this is referred to as 'hyperparameter optimization', where the usual goal is to optimize a measure of the algorithm's performance on an independent dataset. We use _cross validation_ to estimate the generalization performance of this. This is different than actual learning problems, which optimize based on a loss function in order to learn parameters that model the input well, whereas hyperparameter optimization is to make sure the model doesn't overfit.
+
+Suggested from _10chik on #bioinformatics (freenode): Introduce a new label (is_unlabeled) and fit a model to that. If a predictive model is found (i.e., AUC > 0.8), then drop the features used to make that model (i.e., the features that are (loosely) 'unique' to the unlabeled, and then drop the unlabeled samples and go from there.
+    From here, would it then make sense to introduce the dropped features one by one to see how they impact the overall score?
+    What if the genes I drop are really important? I guess they'd be in the other patients too if they were THAT important
+    ********** update 1/7/17: this doesn't work. neither does the stats.stackexchange proposal. **********
+
+
+
+
+1/7/16: Atom crashed, lost work on _10chik's solution. What was lost: data split, forest model creation, then making a mini test suite that returns results from roc_auc_score, f1_test, and confusion matrix — 10chik's solution does not work
+
+also lost work on the 2 percent variance in mutation deletion thing, but that also did not work
+
+todo: start cleaning up this motherfucker and find another way to do your work bc Atom keeps dicking you; maybe migrate to Jupyter proper, and combine code from RFpyhelper here perhaps? we'll do that if non-atom things also shit the bed
+'''
+
+'''
+UNUSED CODE BECAUSE I AM NOT CONFIDENT IN MY GITHUB ABILITIES
+'''
+'''
+# %% Biclustering to get features
+# experimental
+clusters = sklearn.cluster.bicluster.SpectralCoclustering(n_clusters = 50)
+fitted_clusters = clusters.fit(data_norm.copy)
+pList = pd.DataFrame.as_matrix(progressedList(data_norm.truth["PROGRESSED"]))
+biclusterCommon(fitted_clusters, pList)[40]
+fitted_clusters.get_indices(40)[1]
+type(clusters)
+pd.DataFrame.as_matri
+# %%
+forest = RandomForestClassifier()
+'''
