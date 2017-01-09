@@ -111,7 +111,7 @@ TODO: 1/8/17
 - Make a ML model
 - Optimize hyperparameters with the CV set
 - Make some functions to visualize how good the ML model is — maybe learn seaborn or something.
-
+- Fix the memory issue that's happening.
 
 '''
 # %%
@@ -469,9 +469,6 @@ Suggested from _10chik on #bioinformatics (freenode): Introduce a new label (is_
     From here, would it then make sense to introduce the dropped features one by one to see how they impact the overall score?
     What if the genes I drop are really important? I guess they'd be in the other patients too if they were THAT important
     ********** update 1/7/17: this doesn't work. neither does the stats.stackexchange proposal. **********
-
-
-
 
 1/7/16: Atom crashed, lost work on _10chik's solution. What was lost: data split, forest model creation, then making a mini test suite that returns results from roc_auc_score, f1_test, and confusion matrix — 10chik's solution does not work, neither does stats.stackexchange solution. recode these for completeness.
 
