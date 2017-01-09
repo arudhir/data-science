@@ -8,6 +8,14 @@ import rpy2.robjects as robjects
 import warnings
 import matplotlib.pyplot as plt
 import lifelines
+from __future__ import print_function
+from sys import getsizeof, stderr
+from itertools import chain
+from collections import deque
+try:
+    from reprlib import repr
+except ImportError:
+    pass
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
@@ -19,6 +27,7 @@ from sklearn.manifold import Isomap
 from sklearn.covariance import graph_lasso
 from sklearn.cluster.bicluster import SpectralCoclustering
 from sklearn.model_selection import train_test_split
+from sklearn.cross_validation import StratifiedKFold
 from lifelines.utils import datetimes_to_durations, survival_table_from_events
 from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
 from lifelines.statistics import logrank_test
@@ -49,19 +58,55 @@ nan_indices = Data_suffix.labels["TO"].index[Data_suffix.labels["TO"].apply(np.i
 Data_suffix.labels["PROGRESSED"] = ~Data_suffix.labels["TP"].isnull()
 Data_suffix.labels["PROGRESSED"].ix[nan_indices] = np.nan # Otherwise False shows up instead of NAN
 
+# del file1, file2, file3, file4, Data_init
+Data_suffix.exp.to_csv("exp_suffix.csv")
+Data_suffix.cop.to_csv("cop_suffix.csv")
+Data_suffix.mut.to_csv("mut_suffix.csv")
+Data_suffix.labels.to_csv("lab_suffix.csv")
 '''
-Since sklearn cannot handle NaN values, new Data tuples will be made depending on the context. Afterwards, split the data into the training set, the cross validation set, and the test set in a 50/25/25 split.
+Since sklearn cannot handle NaN values, we will either 1) Impute NaN values or 2) Eliminate bad rows, depending on the situation. Afterwards, split the data into the training set, the cross validation set, and the test set in a 50/25/25 split.
 '''
 
-exp_impute = featureImputer('NaN', 'mean', 0, Data_suffix.exp)
-cop_impute = featureImputer('NaN', 'mean', 0, Data_suffix.cop)
+# Impute the missing values
+exp_impute = featureImputer("NaN", "mean", 0, Data_suffix.exp)
+cop_impute = featureImputer("NaN", "mean", 0, Data_suffix.cop)
+#mut_impute = featureImputer("NaN", "most_frequent", 0, Data_suffix.mut) # Perhaps using the mean makes sense too — assigning a probability that a gene is mutated given the rest
+mut_impute = featureImputer("NaN", "mean", 0, Data_suffix.mut)
+
+# Eliminate the NAN values from the labels for now — see if there is a better way of handling this; proportional hazards model might deal with this better
+label_nonan = Data_suffix.labels.copy()
+mask = label_nonan["PROGRESSED"].index.isin(nan_indices)
+label_nonan = label_nonan[~mask]
+
+# Make a Data tuple with non-NAN data
+Data_nonan = Data(exp_impute, cop_impute, mut_impute, label_nonan)
+
+
+
+# Split the data
+# Concatenate all the data dataframes to make one big X
+X = pd.concat([Data_nonan.exp, pd.concat([Data_nonan.cop, Data_nonan.mut], axis=1)], axis=1)
+y = Data_nonan.labels["PROGRESSED"] # Classification labels
+
+eval_size = 0.10
+kf = StratifiedKFold(y, round(1. / eval_size))
+train_indices, valid_indices = next(iter(kf))
+X_train, y_train = X[X.index[train_indices]], y[y.index[train_indices]] # kf returns the indices of df.index, not df - therefore we need to change back to our dataframe's index
+X_valid, y_valid = X[X.index[valid_indices]], y[y.index[valid_indices]]
+
+# There is a memory problem here - I think over 600mb is being allocated... Unsure if this is because of Jupyter or because of me.
+# TODO: Allocate memory better - do more inplace dataframe making, no need to save onto the old things if we write to a csv file anyways.
+# total_size(Data_nonan, verbose=True) + total_size(X) + total_size(y) + total_size(Data_suffix) + total_size(Data_init) = 602346560 bytes
+# Solution: Dump to file so that we can access later
+
 
 '''
 TODO: 1/8/17
-- Figure out how to impute a boolean matrix
-- Take some time to see if xgboost can deal with sparse matrices so you don't have to make questionable decisions with the data
-- Split the data
-- Stack features
+- Figure out how to impute a boolean matrix — DONE
+- Take some time to see if xgboost can deal with sparse matrices so you don't have to make questionable decisions with the data — DONE
+    - ANS: Maybe not, because NaN elements are not zero and cannot be considered as such! We have a dense matrix with missing/censored values.
+- Split the data - DONE
+- Stack features — DONE
 - Throw it all into a tree-based model to feature select
 - Make a ML model
 - Optimize hyperparameters with the CV set
@@ -69,15 +114,57 @@ TODO: 1/8/17
 
 
 '''
-
+# %%
 '''
 HELPER FUNCTIONS
 '''
+def total_size(o, handlers={}, verbose=False):
+    """ Returns the approximate memory footprint an object and all of its contents.
+
+    Automatically finds the contents of the following builtin containers and
+    their subclasses:  tuple, list, deque, dict, set and frozenset.
+    To search other containers, add handlers to iterate over their contents:
+
+        handlers = {SomeContainerClass: iter,
+                    OtherContainerClass: OtherContainerClass.get_elements}
+
+    Taken from https://code.activestate.com/recipes/577504/
+
+    """
+    dict_handler = lambda d: chain.from_iterable(d.items())
+    all_handlers = {tuple: iter,
+                    list: iter,
+                    deque: iter,
+                    dict: dict_handler,
+                    set: iter,
+                    frozenset: iter,
+                   }
+    all_handlers.update(handlers)     # user handlers take precedence
+    seen = set()                      # track which object id's have already been seen
+    default_size = getsizeof(0)       # estimate sizeof object without __sizeof__
+
+    def sizeof(o):
+        if id(o) in seen:       # do not double count the same object
+            return 0
+        seen.add(id(o))
+        s = getsizeof(o, default_size)
+
+        if verbose:
+            print(s, type(o), repr(o), file=stderr)
+
+        for typ, handler in all_handlers.items():
+            if isinstance(o, typ):
+                s += sum(map(sizeof, handler(o)))
+                break
+        return s
+
+    return sizeof(o)
+
 def featureImputer(mv, strat, ax, f):
     '''
     Imputes the NaN values for the feature set passed, transforms the dataframe, and makes sure the columns are what they ought to be.
 
-    Note: copy is explictly being set to False here — a copy will not be made.
+    Note: Imputer creates a copy internally.
 
     Args:
         mv (str): The type of feature Imputer finds.
@@ -97,6 +184,7 @@ def featureImputer(mv, strat, ax, f):
     f = pd.DataFrame(imp.fit_transform(f))
     f = f.rename(columns=col_val)
     return f
+
 def addSuffixes(d):
     '''
     Adds suffixes to our Data. Returns a completely new Data tuple.
@@ -107,6 +195,7 @@ def addSuffixes(d):
     tl = d.labels.copy()
     ret = Data(te, tc, tm, tl)
     return ret
+
 def addLabel(self, new_label):
     '''
     Inserts a new label — modifies labels, does not create copy. Initializes to 0
@@ -117,6 +206,7 @@ def addLabel(self, new_label):
         None
     '''
     self.insert(len(self.columns), new_label, 0)
+
 def biclusterCommon(clusters, progList):
     '''
     Finds the elements that are the same between a bicluster and a list of progressed patients.
@@ -133,6 +223,7 @@ def biclusterCommon(clusters, progList):
         n = np.sum((np.in1d(p, clusters.get_indices(i)[0])).astype(int))
         ret.append(n)
     return ret
+
 def progressedList(data):
     '''
     Gives the patients who have progressed.
@@ -148,6 +239,7 @@ def progressedList(data):
         if (data[i]):
             ret.append(i+1) # Fix indicing at 0
     return pd.Series(ret)
+
 def confusionMatrixStatistics(train_data, truth_data, num_est, xy_cv, n_mat):
     '''
     Summarizes confusion matrix statistics for a specified number of classification forests.
@@ -178,6 +270,7 @@ def confusionMatrixStatistics(train_data, truth_data, num_est, xy_cv, n_mat):
     ret_fpos = sp.stats.describe(false_pos)
 
     return (confusion_matrix_arr, (true_neg, false_neg, true_pos, false_pos), (ret_tneg, ret_fneg, ret_tpos, ret_fpos))
+
 def rankFeatures(forest, features):
     '''
     Prints forest features ranked by their importance.
@@ -194,6 +287,7 @@ def rankFeatures(forest, features):
     for f in range(features.shape[1]):
         print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
     return indices
+
 def classificationForest(features, labels, n):
     '''
     Creates and fits a random forest classifier on given features and labels.
@@ -213,6 +307,7 @@ def classificationForest(features, labels, n):
     y = training_val[1]["PROGRESSED"]
     ret = forest.fit(X, y)
     return ret
+
 def regressionForest(features, labels, n):
     '''
     Creates and fits a random forest regressor on given features and labels.
@@ -232,6 +327,7 @@ def regressionForest(features, labels, n):
     y = training_val[1]["TO"]
     ret = forest.fit(X, y)
     return ret
+
 def alignData(df1, df2):
     '''
     Create dataframes that have the same row indices (same samples)
@@ -245,6 +341,7 @@ def alignData(df1, df2):
     ret1 = df1.loc[index, :]
     ret2 = df2.loc[index, :]
     return (ret1, ret2)
+
 def normalizeData(d):
     '''
     Normalizes expression, copy, and ground truth data.
@@ -264,6 +361,7 @@ def normalizeData(d):
 
     ret_data = Data(temp_exp, temp_copy, temp_truth)
     return ret_data
+
 def normWithNan(v):
     '''
     Finds the norm of data that has nan elements.
@@ -280,6 +378,7 @@ def normWithNan(v):
         sum += (elem ** 2)
     ret = math.sqrt(sum)
     return ret
+
 def cleanData(d):
     '''
     Drops rows that are entirely na's while adding the PROGRESSED column to the ground truth dataframe.
@@ -302,6 +401,7 @@ def cleanData(d):
     ret_data = Data(temp_exp, temp_copy, temp_truth)
 
     return ret_data
+
 def geneDataFilter(d):
     '''
     Implements the Bioconductor function genefilter() to remove genes based on coefficient of variation.
@@ -331,6 +431,7 @@ def geneDataFilter(d):
     ret_data = Data(temp_exp, temp_copy, d.truth)
 
     return ret_data
+
 def readFiles(exp, copy, mut, truth):
     '''
     Read in the initial csv files and return a namedtuple Data of the csv files.
@@ -372,26 +473,6 @@ Suggested from _10chik on #bioinformatics (freenode): Introduce a new label (is_
 
 
 
-1/7/16: Atom crashed, lost work on _10chik's solution. What was lost: data split, forest model creation, then making a mini test suite that returns results from roc_auc_score, f1_test, and confusion matrix — 10chik's solution does not work
+1/7/16: Atom crashed, lost work on _10chik's solution. What was lost: data split, forest model creation, then making a mini test suite that returns results from roc_auc_score, f1_test, and confusion matrix — 10chik's solution does not work, neither does stats.stackexchange solution. recode these for completeness.
 
-also lost work on the 2 percent variance in mutation deletion thing, but that also did not work
-
-todo: start cleaning up this motherfucker and find another way to do your work bc Atom keeps dicking you; maybe migrate to Jupyter proper, and combine code from RFpyhelper here perhaps? we'll do that if non-atom things also shit the bed
-'''
-
-'''
-UNUSED CODE BECAUSE I AM NOT CONFIDENT IN MY GITHUB ABILITIES
-'''
-'''
-# %% Biclustering to get features
-# experimental
-clusters = sklearn.cluster.bicluster.SpectralCoclustering(n_clusters = 50)
-fitted_clusters = clusters.fit(data_norm.copy)
-pList = pd.DataFrame.as_matrix(progressedList(data_norm.truth["PROGRESSED"]))
-biclusterCommon(fitted_clusters, pList)[40]
-fitted_clusters.get_indices(40)[1]
-type(clusters)
-pd.DataFrame.as_matri
-# %%
-forest = RandomForestClassifier()
 '''
