@@ -8,6 +8,7 @@ import rpy2.robjects as robjects
 import warnings
 import matplotlib.pyplot as plt
 import lifelines
+import seaborn as sns
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
@@ -24,7 +25,7 @@ from sklearn.covariance import graph_lasso, GraphLassoCV, ledoit_wolf, Empirical
 from sklearn.cluster.bicluster import SpectralCoclustering
 from sklearn.model_selection import train_test_split
 from sklearn.cross_validation import StratifiedKFold
-from lifelines.utils import datetimes_to_durations, survival_table_from_events
+from lifelines.utils import datetimes_to_durations, survival_table_from_events, k_fold_cross_validation
 from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
 from lifelines.statistics import logrank_test
 from lifelines.datasets import load_rossi
@@ -201,70 +202,60 @@ lr.fit(X_new, y_train)
 lr.decision_function(X_new)
 lr.predict_proba(X_new)
 
-
+# Don't forget to transform the data
 X_test_trans = model.transform(X_test)
 #X_test_trans = X_test[selected_feature_indices]
 y_pred = lr.predict(X_test_trans)
+
+# Coefficients
+pd.DataFrame(lr.coef_)
 
 # The logistic regression model without tuned hyperparameters, or optimized anything (but with feature selection) is 5% better than flipping a coin.
 confusion_matrix(y_test, y_pred)
 roc_auc_score(y_test, y_pred) # 0.55147058823529405
 f1_score(y_test, y_pred) # 0.31578947368421056
+
+
+
+
+
 '''
 Survival Analysis
 =================
+Look into Gaussian Processes as well
 
+3 approaches to fitting survival models (http://data.princeton.edu/wws509/notes/c7s3.html):
+    1) Parametric
+    2) Semi-parametric
+    3) Non-parametric
+        - Cox. Functions by leaving the baseline hazard unspecified and relies on a partial likelihood function.
+
+Although I think Cox is the approach that should be taken, it doesn't seem to be working the way I am using it. Read up on how Cox is used in the context of disease progression and genomics.
 '''
 
-rossi_dataset = load_rossi()
 cf = CoxPHFitter()
-cf.fit(rossi_dataset, 'week', event_col='arrest')
-rossi_dataset
-kmf = KaplanMeierFitter()
-kmf.fit(durations=cf_table["TO"], event_observed=cf_table["PROGRESSED"])
-
-kmf.survival_function_
-kmf.plot()
-
-
-
-naf = NelsonAalenFitter()
-naf.fit(durations=cf_table["TO"], event_observed=cf_table["PROGRESSED"])
-naf.plot()
-
-# For shits and giggles, making a covariance matrix
-lw_cov = ledoit_wolf(X_new)[0]
-
-
-emp_cov = EmpiricalCovariance()
-ecov = emp_cov.fit(X_new)
-ecov.covariance_
-# lw_cov and ecov.covariance_ are similar
 labels_train = labels.iloc[y_train.index]
+surviv_mat = pd.concat([labels_train.iloc[:, 2:4], X_new], axis=1)
+cf.fit(surviv_mat, "TO", "PROGRESSED", include_likelihood=True) # adding either include_likelihood or strata made predict_cumulative_hazard work -- find out why
 
-columns = pd.Series(["fuck off", "duration", "observed"])
-a = labels_train.rename(columns=columns)
-labels_train.columns = columns
+cox_surv_func = cf.predict_survival_function(X_test)
+cf.predict_cumulative_hazard(X_new) # also gives everone the same number
+cf.predict_expectation(X_new) # gives everyone the same number
+cf.print_summary()
+cf.baseline_hazard_
+cf.baseline_survival_
 
-# Wants a matrix in the form T | E | covariates
-aaf_mat.rename()
-labels_train
-aaf_mat = pd.concat([labels_train.iloc[:, 1:3], X_new], axis=1)
-aaf = AalenAdditiveFitter(coef_penalizer=1.0, fit_intercept=True)
+lifelines.utils.concordance_index(
 
-
-aaf_mat
-obs = pd.Series.as_matrix(labels_train["observed"])
-
-AalenAdditiveFitter.fit
-
-aaf.fit(dataframe=aaf_mat, duration_col="duration", event_col="observed")
-
-figsize(12.5, 8)
-pylab.rcParams['figure.figsize'] = (80, 80) # i might have increased it too high from 50, 6
-aaf.plot()
+cox.baseline_survival_.plot()
+cox.baseline_hazard_.plot()
+cox.baseline_cumulative_hazard_.plot()
 
 
+# rossi_dataset = load_rossi()
+# cf = CoxPHFitter()
+# cf.fit(rossi_dataset, 'week', event_col='arrest')
+# cf.print_summary()
 '''
 TODO: 1/8/17
 - Figure out how to impute a boolean matrix — DONE
