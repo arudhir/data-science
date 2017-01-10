@@ -11,22 +11,23 @@ import lifelines
 from rpy2.robjects.vectors import DataFrame
 from rpy2.robjects.packages import importr, data
 from rpy2.robjects import pandas2ri
-from sklearn import linear_model
+from sklearn.linear_model import LogisticRegression
 from sklearn.feature_selection import SelectFromModel
 from sklearn.svm import SVC
 from sklearn import preprocessing
 from sklearn.preprocessing import MinMaxScaler, normalize, Imputer
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
+from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, f1_score
 from sklearn.manifold import Isomap
-from sklearn.covariance import graph_lasso
+from sklearn.covariance import graph_lasso, GraphLassoCV, ledoit_wolf, EmpiricalCovariance
 from sklearn.cluster.bicluster import SpectralCoclustering
 from sklearn.model_selection import train_test_split
 from sklearn.cross_validation import StratifiedKFold
 from lifelines.utils import datetimes_to_durations, survival_table_from_events
 from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
 from lifelines.statistics import logrank_test
+from lifelines.datasets import load_rossi
 from scipy.interpolate import CubicSpline
 from sklearn.externals import joblib
 from IPython.display import display, HTML
@@ -40,6 +41,7 @@ try:
 except ImportError:
     pass
 %matplotlib inline
+%pylab inline
 warnings.filterwarnings('ignore')
 pandas2ri.activate()
 biocinstaller = importr("BiocInstaller")
@@ -89,6 +91,11 @@ Then, combine features into variable X, and assign variable y to the labels.
 Then, split the data into the training set and the validation set. Note: I don't think there is enough data to split the samples into a training, cross-validation (sometimes called validation), and testing set. k-fold cross-validation handles this situation. The basic approach involves initially splitting the data into two parts: training set and testing set. However, instead of using a validation set — split the training set into k smaller sets ("folds"), and train the model using (k-1) folds, and validate the model using the remaining fold, then evaluate the performance by some metric. Then run this in a loop and average all the metrics. Although computationally expensive — data will be saved.. Additional notes:
     - Use stratified k-fold cross-validation, because this handles situations where label distribution is heavily skewed, and ensures that relative class frequencies between folds is preserved.
 '''
+# When we restart the kernel just load the matrices we sent to csv for convenience
+exp = pd.read_csv("exp_suffix.csv")
+cop = pd.read_csv("cop_suffix.csv")
+mut = pd.read_csv("mut_suffix.csv")
+labels = pd.read_csv("labels_suffix.csv")
 
 # Impute the missing values - a copy will be made here
 exp_nonan = featureImputer("NaN", "mean", 0, exp)
@@ -98,6 +105,7 @@ mut_nonan = featureImputer("NaN", "mean", 0, mut)
 
 # Eliminate the NAN values from the labels for now — see if there is a better way of handling this; proportional hazards model might deal with this better
 labels_nonan = labels.copy()
+nan_indices = labels["PROGRESSED"].loc[np.isnan(labels["PROGRESSED"])].index
 mask = labels_nonan["PROGRESSED"].index.isin(nan_indices)
 labels_nonan = labels_nonan[~mask]
 
@@ -127,27 +135,43 @@ Feature Selection
 =================
 Select the most predictive features from the data.
 
-Note: joblib.dump(transformer, 'filename.pkl') to store transformers or a pipeline
+Note: joblib.dump(transformer, 'filename.pkl') to store transformers or a pipeline in order to apply them to the test set later.
 
-TODO: Normalize the expression data.
+TODO: Normalize the expression data. - NO NEED
+    - Per forum post: Gene expression data: values are normalized by FPKM (fragment per kilobase per million).
+                      Copy number data: values represent the log-2 scaled ratio between tumor and normal tissue. 0 means no copy change, negative values are deletions, and positive values are amplifications.
 '''
-
 
 clf = RandomForestClassifier()
 clf = clf.fit(X_train, y_train)
 model = SelectFromModel(clf, prefit=True) # Not preserving column names or index names
-feat_imp = (rankFeatures(clf, X_train))
-
+feat_imp = rankFeatures(clf, X_train)
 X_new = model.transform(X_train)
+
+selected_feature_indices = pd.Series(feat_imp[:X_new.shape[1]])
 
 # TODO: Make the below into a helper function bc wtf rofl.
 # Transform, cast to DF, find the top features. cast that to a series, find its columns, and rename the DF's columns accordingly.
+# https://github.com/scikit-learn/scikit-learn/issues/6425
+# The idea of preserving feature names across transformers (a get_feature_names) is an ongoing issue that is still unresolved
 X_new = pd.DataFrame(model.transform(X_train)).rename(columns=pd.Series(X_train[feat_imp[:X_new.shape[1]]].columns)) # columns
 X_new.index = y_train.index # indices
 
-# https://github.com/scikit-learn/scikit-learn/issues/6425
-# The idea of preserving feature names across transformers (a get_feature_names) is an ongoing issue that needs to be solved
+# Dump transformer for use on test data
+joblib.dump(model, 'rfcTransformer.pkl')
 
+
+
+
+
+
+# doesn't work - spent only a few min trying to get it to work
+# lasso = sk.covariance.GraphLasso()
+# lasso.fit(X_new)
+#
+# skf = sk.model_selection.StratifiedKFold()
+# cov = sk.covariance.GraphLassoCV(cv=skf)
+# cov.fit(X_new)
 
 '''
 Hyper-parameter Selector Methods
@@ -171,12 +195,74 @@ Make a model.
 
 Look into the idea of ensembling a bunch of models.
 '''
+# Logistic Regression
+lr = LogisticRegression()
+lr.fit(X_new, y_train)
+lr.decision_function(X_new)
+lr.predict_proba(X_new)
 
+
+X_test_trans = model.transform(X_test)
+#X_test_trans = X_test[selected_feature_indices]
+y_pred = lr.predict(X_test_trans)
+
+# The logistic regression model without tuned hyperparameters, or optimized anything (but with feature selection) is 5% better than flipping a coin.
+confusion_matrix(y_test, y_pred)
+roc_auc_score(y_test, y_pred) # 0.55147058823529405
+f1_score(y_test, y_pred) # 0.31578947368421056
 '''
 Survival Analysis
 =================
 
 '''
+
+rossi_dataset = load_rossi()
+cf = CoxPHFitter()
+cf.fit(rossi_dataset, 'week', event_col='arrest')
+rossi_dataset
+kmf = KaplanMeierFitter()
+kmf.fit(durations=cf_table["TO"], event_observed=cf_table["PROGRESSED"])
+
+kmf.survival_function_
+kmf.plot()
+
+
+
+naf = NelsonAalenFitter()
+naf.fit(durations=cf_table["TO"], event_observed=cf_table["PROGRESSED"])
+naf.plot()
+
+# For shits and giggles, making a covariance matrix
+lw_cov = ledoit_wolf(X_new)[0]
+
+
+emp_cov = EmpiricalCovariance()
+ecov = emp_cov.fit(X_new)
+ecov.covariance_
+# lw_cov and ecov.covariance_ are similar
+labels_train = labels.iloc[y_train.index]
+
+columns = pd.Series(["fuck off", "duration", "observed"])
+a = labels_train.rename(columns=columns)
+labels_train.columns = columns
+
+# Wants a matrix in the form T | E | covariates
+aaf_mat.rename()
+labels_train
+aaf_mat = pd.concat([labels_train.iloc[:, 1:3], X_new], axis=1)
+aaf = AalenAdditiveFitter(coef_penalizer=1.0, fit_intercept=True)
+
+
+aaf_mat
+obs = pd.Series.as_matrix(labels_train["observed"])
+
+AalenAdditiveFitter.fit
+
+aaf.fit(dataframe=aaf_mat, duration_col="duration", event_col="observed")
+
+figsize(12.5, 8)
+pylab.rcParams['figure.figsize'] = (80, 80) # i might have increased it too high from 50, 6
+aaf.plot()
 
 
 '''
@@ -194,9 +280,10 @@ TODO: 1/9/17
 - Make a ML model
 - Optimize hyperparameters with the CV set
 - Make some functions to visualize how good the ML model is — maybe learn seaborn or something.
-- Fix the memory issue that's happening.
+- Fix the memory issue that's happening - MAYBE; I think it's Jupyter/Atom shitting it up not the code
 - Figure out how to use sklearn.pipeline.Pipeline to pipeline the transformation steps for ease
     - Think about whether or not this is possible with the fact that feature names don't seem to get preserved across transformations
+    - Make a wrapper function to address the feature name issue with transformations.
 
 
 Note on sklearn.pipeline.Pipeline - Allows for a convenient way to apply a fixed sequence of steps on our data, e.g., say we have to feature select, normalize, and classify. Pipeline would allow us to only have to call fit() and transform() once on our data, and allow us to use grid search (check sklearn docs) over all all estimators in the pipeline at once. A pipeline consists of estimators, all of which (except the last one) have to be transformers (i.e., have a transform method). The last one can be whatever.
