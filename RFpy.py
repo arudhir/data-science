@@ -197,6 +197,9 @@ TODO: 1/9/17
 - Fix the memory issue that's happening.
 - Figure out how to use sklearn.pipeline.Pipeline to pipeline the transformation steps for ease
     - Think about whether or not this is possible with the fact that feature names don't seem to get preserved across transformations
+
+
+Note on sklearn.pipeline.Pipeline - Allows for a convenient way to apply a fixed sequence of steps on our data, e.g., say we have to feature select, normalize, and classify. Pipeline would allow us to only have to call fit() and transform() once on our data, and allow us to use grid search (check sklearn docs) over all all estimators in the pipeline at once. A pipeline consists of estimators, all of which (except the last one) have to be transformers (i.e., have a transform method). The last one can be whatever.
 '''
 
 # There is a memory problem here - I think over 600mb is being allocated... Unsure if this is because of Jupyter or because of me.
@@ -542,5 +545,4 @@ Suggested from _10chik on #bioinformatics (freenode): Introduce a new label (is_
 
 
 
-Note on sklearn.pipeline.Pipeline - Allows for a convenient way to apply a fixed sequence of steps on our data, e.g., say we have to feature select, normalize, and classify. Pipeline would allow us to only have to call fit() and transform() once on our data, and allow us to use grid search (check sklearn docs) over all all estimators in the pipeline at once. A pipeline consists of estimators, all of which (except the last one) have to be transformers (i.e., have a transform method). The last one can be whatever.
 '''
