@@ -92,7 +92,7 @@ Then, combine features into variable X, and assign variable y to the labels.
 Then, split the data into the training set and the validation set. Note: I don't think there is enough data to split the samples into a training, cross-validation (sometimes called validation), and testing set. k-fold cross-validation handles this situation. The basic approach involves initially splitting the data into two parts: training set and testing set. However, instead of using a validation set — split the training set into k smaller sets ("folds"), and train the model using (k-1) folds, and validate the model using the remaining fold, then evaluate the performance by some metric. Then run this in a loop and average all the metrics. Although computationally expensive — data will be saved.. Additional notes:
     - Use stratified k-fold cross-validation, because this handles situations where label distribution is heavily skewed, and ensures that relative class frequencies between folds is preserved.
 '''
-# When we restart the kernel just load the matrices we sent to csv for convenience
+# When we restart the kernel just load the matrices we sent to csv for convenience/for the sake of memory.
 exp = pd.read_csv("exp_suffix.csv")
 cop = pd.read_csv("cop_suffix.csv")
 mut = pd.read_csv("mut_suffix.csv")
@@ -130,7 +130,7 @@ Reduce the dimensionality of the data. There are primarily two approaches: eigen
 1/9/17: Skipping this because it's not needed for an inital model.
 '''
 
-
+X_train.shape
 '''
 Feature Selection
 =================
@@ -141,6 +141,21 @@ Note: joblib.dump(transformer, 'filename.pkl') to store transformers or a pipeli
 TODO: Normalize the expression data. - NO NEED
     - Per forum post: Gene expression data: values are normalized by FPKM (fragment per kilobase per million).
                       Copy number data: values represent the log-2 scaled ratio between tumor and normal tissue. 0 means no copy change, negative values are deletions, and positive values are amplifications.
+Q: Aren't we losing data we can't afford to lose when excluding ~80 people from being included in the feature selection process?
+    TODO: See how different the result is on the whole dataset vs. just the training sample. Get the genes that are scored >0.0 in both, make them into Sets, and use logical&
+
+Note: The copy number and/or the mutation data might just be added noise — most of the papers deal with just expression data. Find a more intelligent way to incorporate them, or eliminate them.
+
+Iterative Pearson correlation coefficients: Generates Pearson correlation coefficients in the initial m samples x n features feature space to get an mxm matrix, which is then interpreted as m-samples m-features, finds the Pcc again, and iterates; reveals sample similarity hiding in higher-order correlation features, enlarge weak patterns underlying the raw dataset, and preserve the balanced independent relationship.
+http://nar.oxfordjournals.org/content/early/2013/06/12/nar.gkt343.full
+    • Doesn't seem hard to implement and since all of the patients have myeloma, this might be a better way to find finer differences between the patients — ones that would lead to progression time differences.
+    • Maybe a NN can be made using this? dunno
+    • The accuracy of both k-means clustering and naive Bayes jumped like 15% when just using first-order coefficients.
+    • Sample workflow: Select top 1000 features using F-test, then iPcc
+    • "The reduced dimensionality allows rapid and accurate computation of the global optimum of many clustering and classification algorithms and thus improves accuracy." -- maybe this can be combined with
+    • "However, iPcc is not an independent algorithm for disease class discovery or prediction. It provides an effective means to underpin the underlying patterns embedded within the gene expression data sets from the feature extraction perspective. Therefore, it can be used in combination with other clustering, classification, feature selection and feature extraction algorithms, as demonstrated in the results section."
+    ° Can't find a wrapper function for the iPcc, maybe I can make one and give it to scikit-learn
+Instead of approaching this problem as finding features to predict cancer (because they already all have cancer), perhaps approaching it from a cancer subtyping problem (Ren X, Wang Y, Wang J, Zhang XS. A unified computational model for revealing and predicting subtle subtypes of cancers. BMC Bioinformatics 2012;13:70.) might be fruitful, where the subtypes are how quickly they progress.
 '''
 
 clf = RandomForestClassifier()
@@ -194,7 +209,10 @@ Model Selection
 ===============
 Make a model.
 
-Look into the idea of ensembling a bunch of models.
+Look into the idea of ensembling a bunch of models (this might be called boosting)
+
+Look into a Bayesian network to get probabilities as well as k-means
+
 '''
 # Logistic Regression
 lr = LogisticRegression()
@@ -210,12 +228,20 @@ y_pred = lr.predict(X_test_trans)
 # Coefficients
 pd.DataFrame(lr.coef_)
 
+
+'''
+Model Evaluation
+================
+Gives metrics about the predictive accuracy of the model.
+
+TODO: Bias/variance decomposition to see where the inaccuracy lies
+    There may not be a need though because its not like you have an option to get more samples.
+'''
+
 # The logistic regression model without tuned hyperparameters, or optimized anything (but with feature selection) is 5% better than flipping a coin.
 confusion_matrix(y_test, y_pred)
 roc_auc_score(y_test, y_pred) # 0.55147058823529405
 f1_score(y_test, y_pred) # 0.31578947368421056
-
-
 
 
 
@@ -231,8 +257,14 @@ Look into Gaussian Processes as well
         - Cox. Functions by leaving the baseline hazard unspecified and relies on a partial likelihood function.
 
 Although I think Cox is the approach that should be taken, it doesn't seem to be working the way I am using it. Read up on how Cox is used in the context of disease progression and genomics.
+
+"SURVIV for survival analysis of mRNA isoform variation" (2016) - http://www.nature.com/articles/ncomms11548
+    • "Simulation studies suggest that SURVIV outperforms the conventional Cox regression survival analysis, especially for data sets with modest sequencing depth."
+    ° loljk, this is for RNAseq data. probably has links to example survival analyses though
+
 '''
 
+# TODO: Figure out the mathematics behind Cox Regression and how to implement it properly.
 cf = CoxPHFitter()
 labels_train = labels.iloc[y_train.index]
 surviv_mat = pd.concat([labels_train.iloc[:, 2:4], X_new], axis=1)
@@ -267,8 +299,8 @@ TODO: 1/8/17
 
 TODO: 1/9/17
 - Pipeline all of the things you can using sklearn.pipeline.Pipeline
-- Throw it all into a tree-based model to feature select
-- Make a ML model
+- Throw it all into a tree-based model to feature select - DONE
+- Make a ML model - DONE
 - Optimize hyperparameters with the CV set
 - Make some functions to visualize how good the ML model is — maybe learn seaborn or something.
 - Fix the memory issue that's happening - MAYBE; I think it's Jupyter/Atom shitting it up not the code
@@ -433,8 +465,10 @@ def rankFeatures(forest, features):
     '''
     Prints forest features ranked by their importance.
     Args:
-        forest (sklearn.ensemble.forest.RandomForestClassifier or RandomForestRegressor): An ensemble of decision trees.
-        features (array): The attribute feature_importances_ associated with a fitted forest.
+        sklearn.ensemble.forest.RandomForestClassifier
+            forest: an ensemble of decision trees for classification
+        list
+            features: The attribute feature_importances_ associated with a fitted forest.
     Returns: An np.array sorted by feature importance.
     '''
     importances = forest.feature_importances_
