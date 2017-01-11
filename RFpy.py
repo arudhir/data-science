@@ -51,9 +51,9 @@ genefilter = importr("genefilter")
 
 # %%
 '''
-A little bit of processing before the preprocessing. Create a namedtuple Data to organize csv data, add suffixes to distinguish features, and add the PROGRESSED label.
+A little bit of processing before the preprocessing.
 '''
-Data = namedtuple('Data', 'exp cop mut labels')
+# Data = namedtuple('Data', 'exp cop mut labels')
 exp = pd.read_csv("expressions_example.csv").add_suffix("_exp")
 cop = pd.read_csv("copynumber_example.csv").add_suffix("_cop")
 mut = pd.read_csv("mutations_example.csv").add_suffix("_mut")
@@ -63,18 +63,6 @@ addLabel(labels, "PROGRESSED")
 nan_indices = labels["TO"].index[labels["TO"].apply(np.isnan)]
 labels["PROGRESSED"] = ~labels["TP"].isnull()
 labels["PROGRESSED"].ix[nan_indices] = np.nan
-
-# Data_suffix = addSuffixes(Data_init)
-# addLabel(Data_suffix.labels, "PROGRESSED")
-# nan_indices = Data_suffix.labels["TO"].index[Data_suffix.labels["TO"].apply(np.isnan)]
-# Data_suffix.labels["PROGRESSED"] = ~Data_suffix.labels["TP"].isnull()
-# Data_suffix.labels["PROGRESSED"].ix[nan_indices] = np.nan # Otherwise False shows up instead of NAN
-
-# del file1, file2, file3, file4, Data_init
-# Data_suffix.exp.to_csv("exp_suffix.csv")
-# Data_suffix.cop.to_csv("cop_suffix.csv")
-# Data_suffix.mut.to_csv("mut_suffix.csv")
-# Data_suffix.labels.to_csv("lab_suffix.csv")
 
 # From here, modifications to data will be context-specific.
 exp.to_csv("exp_suffix.csv")
@@ -121,7 +109,6 @@ X, y = alignData(X, y)
 X_train, X_test, y_train, y_test = sk.model_selection.train_test_split(X, y, test_size = 0.25, stratify=y)
 
 
-
 '''
 Dimensionality Reduction
 ========================
@@ -166,7 +153,7 @@ X_new = model.transform(X_train)
 
 selected_feature_indices = pd.Series(feat_imp[:X_new.shape[1]])
 
-# TODO: Make the below into a helper function bc wtf rofl.
+# TODO: Make the below into a helper function because this obnoxious
 # Transform, cast to DF, find the top features. cast that to a series, find its columns, and rename the DF's columns accordingly.
 # https://github.com/scikit-learn/scikit-learn/issues/6425
 # The idea of preserving feature names across transformers (a get_feature_names) is an ongoing issue that is still unresolved
@@ -175,19 +162,6 @@ X_new.index = y_train.index # indices
 
 # Dump transformer for use on test data
 joblib.dump(model, 'rfcTransformer.pkl')
-
-
-
-
-
-
-# doesn't work - spent only a few min trying to get it to work
-# lasso = sk.covariance.GraphLasso()
-# lasso.fit(X_new)
-#
-# skf = sk.model_selection.StratifiedKFold()
-# cov = sk.covariance.GraphLassoCV(cv=skf)
-# cov.fit(X_new)
 
 '''
 Hyper-parameter Selector Methods
@@ -260,7 +234,7 @@ Although I think Cox is the approach that should be taken, it doesn't seem to be
 
 "SURVIV for survival analysis of mRNA isoform variation" (2016) - http://www.nature.com/articles/ncomms11548
     • "Simulation studies suggest that SURVIV outperforms the conventional Cox regression survival analysis, especially for data sets with modest sequencing depth."
-    ° loljk, this is for RNAseq data. probably has links to example survival analyses though
+    ° just kidding, this is for RNAseq data. probably has links to example survival analyses though
 
 '''
 
