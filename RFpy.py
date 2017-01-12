@@ -195,24 +195,42 @@ Again, use k-fold cross-validation in combination with sklearn's grid search cap
 http://scikit-learn.org/stable/modules/grid_search.html
 
 Look into learning curves, bias and variance curves, and the other stuff taught in Coursera.
+
+Running grid_search.fit() takes an obscene amount if time to run.
 '''
 # Pipeline all the steps so far
 # Note: calling fit() on the pipeline does the same thing as fitting, then transforming for the next thing to fit it.
-estimators = [('pca', PCA()), ('clf', RandomForestClassifier())]
+estimators = [('pca', PCA()), ('clf', rf_model), ('lr', LogisticRegression())]
 pipe = Pipeline(estimators)
-
+pipe.get_params().keys()
 # pipe.fit(X_train, y_train)
 # Pick the parameters you want to vary and their values
-params = dict(pca__n_components=[10, 20, 40, 60, 80, 100, X_train.shape[1]],
-         clf__n_estimators=[10, 25, 50, 100, 500],
-         clf__max_features=['sqrt', 'log2', None],
-         clf__criterion=['entropy'])
+params = dict(pca__n_components=[80, 100, X_train.shape[1]],
+         clf__estimator__n_estimators=[10, 25, 50, 100, 200],
+         clf__estimator__max_features=['sqrt', 'log2', 'auto'],
+         clf__estimator__criterion=['entropy', 'gini'],
+         lr__C=[0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24],
+         lr__solver=['sag'],
+         lr__n_jobs=[-1])
 
-grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc')
+
+grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc', n_jobs=4)
 
 # Fit the training data to get the best parameters for it — I don't think we would need to fit the PCA() and RandomForestClassifier() separately then.
 grid_search.fit(X_train, y_train)
 
+pd.DataFrame(grid_search.cv_results_)
+
+grid_search.best_estimator_
+grid_search.best_score_
+grid_search.best_params_ # n_estimators = 50, n_components = 40
+grid_search.n_splits_
+
+
+y_pred = grid_search.predict(X_test)
+roc_auc_score(y_test, y_pred)
+confusion_matrix(y_test, y_pred)
+f1_score(y_test, y_pred)
 
 '''
 Model Selection
@@ -232,6 +250,7 @@ X_test_trans = pipe.fit_predict(X_test)
 
 # Logistic Regression
 lr = LogisticRegression()
+lr_model = SelectFromModel(lr)
 lr.fit(X_rf_trans, np.ravel(y_train)) # does not include PCA; need to pipeline this beter later
 
 # Don't forget to transform the data
