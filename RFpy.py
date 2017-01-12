@@ -23,8 +23,8 @@ from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, f1_score
 from sklearn.manifold import Isomap
 from sklearn.covariance import graph_lasso, GraphLassoCV, ledoit_wolf, EmpiricalCovariance
 from sklearn.cluster.bicluster import SpectralCoclustering
-from sklearn.model_selection import train_test_split
-from sklearn.cross_validation import StratifiedKFold
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
+from sklearn.decomposition import PCA
 from lifelines.utils import datetimes_to_durations, survival_table_from_events, k_fold_cross_validation
 from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
 from lifelines.statistics import logrank_test
@@ -105,9 +105,16 @@ y = labels_nonan["PROGRESSED"] # Classification labels
 # Make sure there is a label for every sample in X
 X, y = alignData(X, y)
 
-# Get our two sets — stratify wrt y to make sure there is an equal proportion of progressed/not progressed
-X_train, X_test, y_train, y_test = sk.model_selection.train_test_split(X, y, test_size = 0.25, stratify=y)
 
+'''
+Get our two sets — stratify wrt y to make sure there is an equal proportion of progressed/not progressed. From here, we can start applying various algorithms and transformations.
+
+Pipelines should simplify combining various kinds of transformations.
+'''
+# TODO: Make sure there is a different X_train, test, y, etc. for each model
+X_train, X_test, y_train, y_test = sk.model_selection.train_test_split(X, y, test_size = 0.25, stratify=y)
+y_train = np.ravel(y_train) # Documentation for the fitting functions gives a warning when using a dataframe
+y_test = np.ravel(y_test)
 
 '''
 Dimensionality Reduction
@@ -116,8 +123,14 @@ Reduce the dimensionality of the data. There are primarily two approaches: eigen
 
 1/9/17: Skipping this because it's not needed for an inital model.
 '''
+# TODO: In order to generate many PCA estimators for finding the optimal parameter, write a wrapper method to generate PCA's with varying n's
+# Remember PCA is projecting the data on a lower-dimensional axis, mixing all features to find the orthogonal directions of maximum variance.
+pca = PCA() # pca.components_ returns the same shape as X_train; defaults to projecting to min(n_samples, n_features)-dimension space.
+X_pca = pca.fit_transform(X_train) # dimension is num_samp x num_samp; defaults as min(num_feat, num_samp)
 
-X_train.shape
+# Pickle the transformer
+joblib.dump(pca.transform(X_train), 'pcaTransform.pkl')
+
 '''
 Feature Selection
 =================
@@ -125,7 +138,7 @@ Select the most predictive features from the data.
 
 Note: joblib.dump(transformer, 'filename.pkl') to store transformers or a pipeline in order to apply them to the test set later.
 
-TODO: Normalize the expression data. - NO NEED
+NO NEED: Normalize the expression data.
     - Per forum post: Gene expression data: values are normalized by FPKM (fragment per kilobase per million).
                       Copy number data: values represent the log-2 scaled ratio between tumor and normal tissue. 0 means no copy change, negative values are deletions, and positive values are amplifications.
 Q: Aren't we losing data we can't afford to lose when excluding ~80 people from being included in the feature selection process?
@@ -141,27 +154,33 @@ http://nar.oxfordjournals.org/content/early/2013/06/12/nar.gkt343.full
     • Sample workflow: Select top 1000 features using F-test, then iPcc
     • "The reduced dimensionality allows rapid and accurate computation of the global optimum of many clustering and classification algorithms and thus improves accuracy." -- maybe this can be combined with
     • "However, iPcc is not an independent algorithm for disease class discovery or prediction. It provides an effective means to underpin the underlying patterns embedded within the gene expression data sets from the feature extraction perspective. Therefore, it can be used in combination with other clustering, classification, feature selection and feature extraction algorithms, as demonstrated in the results section."
-    ° Can't find a wrapper function for the iPcc, maybe I can make one and give it to scikit-learn
+    • Can't find a wrapper function for the iPcc, maybe I can make one and give it to scikit-learn
+        • I think this might be called something else — "hierarchal clustering", or maybe we can use existing clustering algorithms iteratively with the Pearson correlation coefficient as the metric.
 Instead of approaching this problem as finding features to predict cancer (because they already all have cancer), perhaps approaching it from a cancer subtyping problem (Ren X, Wang Y, Wang J, Zhang XS. A unified computational model for revealing and predicting subtle subtypes of cancers. BMC Bioinformatics 2012;13:70.) might be fruitful, where the subtypes are how quickly they progress.
 '''
 
 clf = RandomForestClassifier()
-clf = clf.fit(X_train, y_train)
-model = SelectFromModel(clf, prefit=True) # Not preserving column names or index names
+clf.fit(X_train, y_train)
 feat_imp = rankFeatures(clf, X_train)
-X_new = model.transform(X_train)
+# selected_feature_indices = pd.Series(feat_imp[:X_new.shape[1]])
 
-selected_feature_indices = pd.Series(feat_imp[:X_new.shape[1]])
+rf_model = SelectFromModel(clf) # Not preserving column names or index names
+X_rf_trans = rf_model.fit_transform(X_train, y_train)
+
 
 # TODO: Make the below into a helper function because this obnoxious
 # Transform, cast to DF, find the top features. cast that to a series, find its columns, and rename the DF's columns accordingly.
 # https://github.com/scikit-learn/scikit-learn/issues/6425
 # The idea of preserving feature names across transformers (a get_feature_names) is an ongoing issue that is still unresolved
-X_new = pd.DataFrame(model.transform(X_train)).rename(columns=pd.Series(X_train[feat_imp[:X_new.shape[1]]].columns)) # columns
-X_new.index = y_train.index # indices
+# Thinking about it again, there doesn't seem to be a need to save feature names (unless I am personally curious)
+# X_new = pd.DataFrame(model.transform(X_train)).rename(columns=pd.Series(X_train[feat_imp[:X_new.shape[1]]].columns)) # columns
+# X_new.index = y_train.index # indices
 
-# Dump transformer for use on test data
-joblib.dump(model, 'rfcTransformer.pkl')
+# Pickle the transformer
+joblib.dump(rf_model.transform(X_train), 'clf_rf.pkl')
+
+
+
 
 '''
 Hyper-parameter Selector Methods
@@ -177,6 +196,23 @@ http://scikit-learn.org/stable/modules/grid_search.html
 
 Look into learning curves, bias and variance curves, and the other stuff taught in Coursera.
 '''
+# Pipeline all the steps so far
+# Note: calling fit() on the pipeline does the same thing as fitting, then transforming for the next thing to fit it.
+estimators = [('pca', PCA()), ('clf', RandomForestClassifier())]
+pipe = Pipeline(estimators)
+
+# pipe.fit(X_train, y_train)
+# Pick the parameters you want to vary and their values
+params = dict(pca__n_components=[10, 20, 40, 60, 80, 100, X_train.shape[1]],
+         clf__n_estimators=[10, 25, 50, 100, 500],
+         clf__max_features=['sqrt', 'log2', None],
+         clf__criterion=['entropy'])
+
+grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc')
+
+# Fit the training data to get the best parameters for it — I don't think we would need to fit the PCA() and RandomForestClassifier() separately then.
+grid_search.fit(X_train, y_train)
+
 
 '''
 Model Selection
@@ -188,19 +224,47 @@ Look into the idea of ensembling a bunch of models (this might be called boostin
 Look into a Bayesian network to get probabilities as well as k-means
 
 '''
+
+
+# Modify the X_test data appropriately
+X_test_trans = pipe.fit_predict(X_test)
+
+
 # Logistic Regression
 lr = LogisticRegression()
-lr.fit(X_new, y_train)
-lr.decision_function(X_new)
-lr.predict_proba(X_new)
+lr.fit(X_rf_trans, np.ravel(y_train)) # does not include PCA; need to pipeline this beter later
 
 # Don't forget to transform the data
-X_test_trans = model.transform(X_test)
-#X_test_trans = X_test[selected_feature_indices]
-y_pred = lr.predict(X_test_trans)
+X_lr_trans = model.fit_transform(X_train, y_train)
 
-# Coefficients
-pd.DataFrame(lr.coef_)
+
+# X_test_trans = X_test[selected_feature_indices]
+# y_pred = lr.predict(X_test_trans)
+
+X_lr_trans.predict(y
+
+
+
+
+
+
+
+
+
+
+SelectFromModel(lr
+
+estimators = [('reduce_dim', PCA(),
+
+estimators = [('reduce_dim', PCA()), ('lr', LogisticRegression()), ('clf', RandomForestClassifier())]
+pipe = Pipeline(estimators)
+scores = cross_val_score(pipe, X_train, np.ravel(y_train), scoring="roc_auc", cv=10) # Internally creates a cross-validation generator using the integer passed as the number of (stratified) K folds. This really makes it a lot easier, lol.
+
+scores
+
+
+
+
 
 
 '''
@@ -282,6 +346,10 @@ TODO: 1/9/17
     - Think about whether or not this is possible with the fact that feature names don't seem to get preserved across transformations
     - Make a wrapper function to address the feature name issue with transformations.
 
+TODO: 1/10/17
+    • Start up various pipelines to organize transformations
+        • Try and see if we need to keep feature names at all, or a way to relate y_values and the X changes
+        •
 
 Note on sklearn.pipeline.Pipeline - Allows for a convenient way to apply a fixed sequence of steps on our data, e.g., say we have to feature select, normalize, and classify. Pipeline would allow us to only have to call fit() and transform() once on our data, and allow us to use grid search (check sklearn docs) over all all estimators in the pipeline at once. A pipeline consists of estimators, all of which (except the last one) have to be transformers (i.e., have a transform method). The last one can be whatever.
 '''
@@ -448,8 +516,8 @@ def rankFeatures(forest, features):
     importances = forest.feature_importances_
     std = np.std([tree.feature_importances_ for tree in forest], axis=0)
     indices = np.argsort(importances)[::-1]
-    for f in range(features.shape[1]):
-        print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
+    # for f in range(features.shape[1]):
+    #     print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
     return indices
 
 def classificationForest(features, labels, n):
