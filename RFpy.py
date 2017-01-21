@@ -16,6 +16,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.feature_selection import SelectFromModel
 from sklearn.svm import SVC
 from sklearn import preprocessing
+from sklearn import neighbors
 from sklearn.preprocessing import MinMaxScaler, normalize, Imputer
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -23,8 +24,9 @@ from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score, f1_score
 from sklearn.manifold import Isomap
 from sklearn.covariance import graph_lasso, GraphLassoCV, ledoit_wolf, EmpiricalCovariance
 from sklearn.cluster.bicluster import SpectralCoclustering
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV, cross_val_predict, validation_curve, RandomizedSearchCV
 from sklearn.decomposition import PCA
+from sklearn.datasets import make_classification
 from lifelines.utils import datetimes_to_durations, survival_table_from_events, k_fold_cross_validation
 from lifelines import AalenAdditiveFitter, CoxPHFitter, KaplanMeierFitter, NelsonAalenFitter
 from lifelines.statistics import logrank_test
@@ -33,6 +35,7 @@ from scipy.interpolate import CubicSpline
 from sklearn.externals import joblib
 from IPython.display import display, HTML
 from collections import namedtuple
+from bayes_opt import BayesianOptimization # To avoid the aggrivatingly slow grid search. Taken from https://github.com/fmfn/
 from __future__ import print_function
 from sys import getsizeof, stderr
 from itertools import chain
@@ -105,7 +108,6 @@ y = labels_nonan["PROGRESSED"] # Classification labels
 # Make sure there is a label for every sample in X
 X, y = alignData(X, y)
 
-
 '''
 Get our two sets — stratify wrt y to make sure there is an equal proportion of progressed/not progressed. From here, we can start applying various algorithms and transformations.
 
@@ -115,6 +117,285 @@ Pipelines should simplify combining various kinds of transformations.
 X_train, X_test, y_train, y_test = sk.model_selection.train_test_split(X, y, test_size = 0.25, stratify=y)
 y_train = np.ravel(y_train) # Documentation for the fitting functions gives a warning when using a dataframe
 y_test = np.ravel(y_test)
+
+
+# Write X and y train/test to file so we don't have to load huge matrices each time
+# Do this for X and y itself too
+X.to_csv = ("X.csv")
+y.to_csv = ("y.csv")
+X_train.to_csv("X_train.csv")
+X_test.to_csv = ("X_test.csv")
+y_train.tofile("y_train.csv")
+y_test.tofile("y_test.csv")
+os.getcwd()
+X = pd.read_csv("X_train.csv")
+y = pd.read_csv("y.csv")
+'''
+Data used to optimize the model should not be used to evaluate the model — namely, data used to feature select and optimize hyperparameters cannot be used to cross-validate the model.
+
+The solution is to use nested cross-validation (which is basically a combinatoric train-cross val-test scheme), or evaluate using the .632+ bootstrapping rule (or just use a proper cross-validation and test set that is entirely separate from training data, but this is unfeasible with a small sample number.
+
+References:
+http://www.pnas.org/content/99/10/6562.full.pdf
+http://jmlr.org/papers/volume11/cawley10a/cawley10a.pdf
+http://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html
+http://stats.stackexchange.com/questions/11602/training-with-the-full-dataset-after-cross-validation
+http://stats.stackexchange.com/questions/102842/what-to-do-after-nested-cross-validation -- has useful pseudocode
+http://stats.stackexchange.com/questions/257361/nested-cross-validation-for-feature-selection-and-hyperparameter-optimization -- my    question
+'''
+for Model in [LogisticRegression, neighbors.KNeighborsClassifier(n_neighbors=5)]:
+    #grid_params = dict(rf_feature_selection__n_estimators=[10, 25, 50, 75, 100],
+    #              rf_feature_selection__min_samples_split=[2, 10, 25, 50])
+
+'''1/18/17 - fuck this trying again tomorrow maybe look at this: http://scikit-learn.org/stable/auto_examples/ensemble/plot_feature_transformation.html#sphx-glr-auto-examples-ensemble-plot-feature-transformation-py why is this so hard and confusing wtf
+
+ideas:
+
+get x_tr,x_te,y_tr,y_te once, then repeat on those same ones to get the inner, use the inner in feature selection
+then transform the outer data using the results from the grid search from the inner part, then test on that untouched x_te, y_te
+
+wrap all that in a loop that runs as many times as you want it to; probably correlates to the fold
+
+why was this so confusing - do tomorrow or something
+'''
+
+# Split the set S of N available samples into n_splits disjunct sets; **outer cross-validation**
+# For i=1 to n_splits
+X, y = alignData(X, y)
+outer = StratifiedKFold(n_splits=10, shuffle=True)
+results = []
+
+# for Model in []
+for trn_indices_out, tst_indices_out in outer.split(X, np.ravel(y)):
+
+    # Is this index selection right? Yes, outer() has memory of what it picked before, so there is no resampling in the test set.
+    X_trn_out, X_tst_out = X.iloc[trn_indices_out], X.iloc[tst_indices_out]
+    y_trn_out, y_tst_out = y.iloc[trn_indices_out], y.iloc[tst_indices_out]
+
+
+    # inner = StratifiedKFold(n_splits=5, shuffle=True)
+    # for trn_indices_in, tst_indices_in in inner.split(X_trn_out, np.ravel(y_trn_out)):
+    #     X_trn_in, X_tst_in = X_trn_out.iloc[trn_indices_in], X_trn_out.iloc[tst_indices_in]
+    #     y_trn_in, y_tst_in = y_trn_out.iloc[trn_indices_in], y_trn_out.iloc[tst_indices_in]
+
+
+
+    # At this point, we have an idea of what we can reasonably expect this model to do
+    # Should I add LogisticRegression and RandomForest in a pipeline, that way I can get some LR parameters as well as generalize the error in the nested CV? Yes.
+    rf_feat_imp = RandomForestClassifier(criterion='entropy')
+    feat_selection = SelectFromModel(rf_feat_imp)
+
+    pipe = Pipeline([
+                    ('fs', feat_selection),
+                    ('fm', LogisticRegression()
+                    )])
+
+    params = {
+         'fs__estimator__n_estimators': [10, 15, 25, 50, 100],
+         'fs__estimator__min_samples_split': [2, 5, 10, 25, 50],
+         'fm__C' : [0.001, 0.01, 0.1, 1, 10, 100]
+        }
+
+    #fs__n_estimators=[10, 15, 25, 50, 100], fs__estimator__min_samples_split=[2, 5, 10, 25, 50],
+    # param_grid = dict(fs__estimator__n_estimators=[10, 15, 25, 50, 100])
+
+    opt_params = GridSearchCV(pipe, params, cv=10, scoring='roc_auc', n_jobs=-1)
+    opt_params.fit(X_trn_out, np.ravel(y_trn_out)) # Transforms using RF then predicts with LR for all sets of parameters
+
+
+
+
+
+
+    opt_estimator = opt_params.best_estimator_ # Find the best estimator
+    opt_estimator.fit(X_trn_out, avel(y_trn_out) # Pipeline will transform with the RandomForest automatically
+    y_pred = opt_estimator.predict(X_tst_out)
+    score = roc_auc_score(y_tst_out, y_pred)
+    results.append((opt_params.best_params_, score))
+
+    # param_grid = dict(n_estimators=[10, 15, 25, 50, 100], min_samples_split=[2, 5, 10, 25, 50])
+    #
+    # rf_feature_selection = SelectFromModel(RandomForestClassifier(criterion='entropy')).estimator
+    #
+    # #rf_opt = GridSearchCV(rf_feature_selection, grid_params, cv=3,
+    #                       #scoring='roc_auc', n_jobs=-1).fit(X_trn_in, y_trn_in) # Since this does cross validation, can I just pass in inner, and Xtrnout
+    #
+    # rf_opt = GridSearchCV(rf_feature_selection, param_grid=param_grid, cv=10, scoring='roc_auc', n_jobs=-1)
+    # rf_opt.fit(X_trn_out, np.ravel(y_trn_out))
+    #
+    # rf_best_estimator = rf_opt.best_estimator_
+    #
+    # rf_opt_model = SelectFromModel(rf_best_estimator, prefit=True)
+    #
+    # X_opt_trn = rf_opt_model.transform(X_trn_out)
+    # X_opt_tst = rf_opt_model.transform(X_tst_out)
+    #
+    # lr = LogisticRegression().fit(X_opt_trn, np.ravel(y_trn_out))
+    #
+    # rf_opt
+    # rf_best_estimator
+    #
+    # y_pred_out = lr.predict(X_opt_tst)
+    # score = roc_auc_score(y_tst_out, y_pred_out)
+    #
+    # results.append((rf_opt.best_params_, score))
+
+pass
+
+# Unstable hyper-parameters when optimizing for LR as well. Maybe just optimize randomforest?
+roc_scores = [roc_auc_score(results[i][1][0], results[i][1][1]) for i in range(len(results))]
+
+
+
+# Now we make our final model
+param_grid = dict(n_estimators=[10, 15, 25, 50, 100], min_samples_split=[2, 5, 10, 25, 50])
+feature_selector = Pipeline(['rf', RandomForestClassifier()])
+rf_opt = GridSearchCV(feature_selector, param_grid=param_grid, cv=10, scoring='roc_auc', n_jobs=-1).fit(X, np.ravel(y))
+X_transform = rf_opt.transform(X)
+final_model = LogisticRegression.fit(X_transform, y)
+
+
+
+
+
+pass
+''' below is junk mixed with really good comments i need to transpose above'''
+    # For each parameter set p; **parameter selection**
+        # Split the set S' of N' available samples into num_samples' disjunct sets
+        # **inner cross-validation**
+        # for j=1 to num_splits'
+                # Train the classifier on the training set S'' = S' \ S'_j
+                # Calculate the test error on the parameter test set S'_j
+            # Compute the inner CV test error
+    inner_scores.append(rf_opt.score(X_tst_in, y_tst_in))
+
+    # Select parameter set p with the minimum error
+    inner_best_params.append(rf_opt.best_params_)
+
+    # Train classifier with selected parameter set on S'
+    X_lr = rf_opt.transform(X_tr_out)
+
+    lr = LogisticRegression().fit(X_lr, y_tr_out)
+
+    # We need to transform the test data too otherwise what was the point of finding an optimized feature selector
+    # Note: An area of confusion is that I am not sure what the best metric to test a feature selector should be, other than take those features and use another model to try and predict with th
+    rf_opt.transform(X_te_out)
+    y_pred = lr.predict(X_te_out)
+
+    outer_scores.append(roc_auc_score(y_te_out, y_pred).mean())
+
+
+X_tr_out.shape
+y_tr_out.shape
+    # Calculate test error on S_i
+# Calculate outer CV test error
+'''
+# Pick the parameters you want to vary and their values
+# Takes forever to run just this
+# Optimal parameters found so far: n_estimators=25, max_features='log2', n_components=150, criterion='entropy'
+# REMEMBER TO PICKLE THIS SO YOU DON'T HAVE TO RUN IT AGAIN - IT NEEDS TO BE RAN AGAIN TO PICKLE, SMH
+
+# Instead of doing each step individually, from here I think a pipeline would take care of mostly everything.
+estimators = [('pca', PCA()), ('clf', RandomForestClassifier())]
+pipe = Pipeline(estimators)
+
+params = dict(clf__n_estimators=[10, 25, 50, 75, 100],
+
+         clf__max_features=['log2', 'auto', 'sqrt'],
+
+         pca__n_components=[50, 100, 150, 200])
+grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc') # 10-fold cross validation
+grid_search.fit(X_train, y_train)
+grid_search.best_params_ #
+X_bestfit = grid_search.transform(X_train)
+'''
+'''
+# Explicitly code in the best parameters we found last time to avoid having to run grid search again:
+# Hyper-parameters were chosen by using the training set using 10-fold cross-validation
+estimators = [('pca', PCA(n_components=150)), ('rf', RandomForestClassifier(n_estimators=25, max_features='log2', criterion='entropy'))]
+pipe = Pipeline(estimators)
+
+# Fit the optimized pipeline to the training set
+# Note: The purpose of this is to select features
+pipe_fitted = pipe.fit(X_train, y_train)
+
+# Transform X_train and X_test to apply the feature selection done above
+# TODO: Address the depreciation warning that is associated with using estimators as transformers
+X_train_trans = pipe_fitted.transform(X_train)
+X_test_trans = pipe_fitted.transform(X_test)
+
+# Model 1: Random Forest Classifier
+# Fits using data that was feature selected wrt itself — is this going to overfit?
+rf_model = RandomForestClassifier(n_estimators=25, max_features='log2', criterion='entropy')
+rf_model_fit = rf_model.fit(X_train_trans, y_train)
+
+# Validation on held-out test set
+y_pred_rf = rf_model_fit.predict(X_test_trans)
+roc_auc_score(y_test, y_pred_rf) # This scores 0.49166666666666664 :(
+f1_score(y_test, y_pred_rf) # 0.0
+
+# Cross-validation on training set
+arr1 = cross_val_score(RandomForestClassifier(), X_train_trans, y_train, scoring='roc_auc', cv=5) # sum(arr2)/len(arr2) = 0.55296296296296288
+sum(a1)/len(a1) # .525
+sum(a2)/len(a2)
+
+# cross_val_predict(RandomForestClassifier(), X_train_trans, y_train, cv=5)
+
+# Model 2: Logistic Regression
+lr_model = LogisticRegression()
+lr_model_fit = lr_model.fit(X_train_trans, y_train)
+
+# Validation of logistic regression
+X_test_trans = pipe_fitted.transform(X_test)
+y_pred_lr = lr_model_fit.predict(X_test_trans)
+roc_auc_score(y_test, y_pred_lr) # This scores 0.61421568627450973!
+f1_score(y_test, y_pred_lr) # 0.39999999999999997
+
+# Cross-validation
+arr4 = cross_val_score(LogisticRegression(), X_train_trans, y_train, scoring='roc_auc', cv=5) # sum(arr4)/len(arr4) = 0.68290123456790131
+
+
+# Model 3: K-Nearest Neighbors
+knn = neighbors.KNeighborsClassifier(n_neighbors=5)
+knn.fit(X_train_trans, y_train)
+
+# Validation
+y_pred_knn = knn.predict(X_test_trans)
+roc_auc_score(y_test, y_pred_knn) # 0.63872549019607838
+f1_score(y_test, y_pred_knn) # 0.43478260869565222
+
+# Cross-validation
+arr5 = cross_val_score(neighbors.KNeighborsClassifier(n_neighbors=5), X_train_trans, y_train, scoring='roc_auc', cv=5) # sum(arr5)/len(arr5) = 0.55385802469135803
+'''
+'''
+# Testing to see if our method has too much bias
+# Test the legitimacy of our method to see if overfitting exists or not
+x, y = make_classification(n_samples=306, n_features=57000, n_informative=2, n_redundant=0)
+x_trn, x_tst, y_trn, y_tst = sk.model_selection.train_test_split(x, y, test_size=0.25, stratify=y)
+p_fitted = pipe.fit(x_trn, y_trn)
+x_trn_trns = p_fitted.transform(x_trn)
+x_tst_trns = p_fitted.transform(x_tst)
+
+rf_mod = RandomForestClassifier(n_estimators=25, max_features='log2', criterion='entropy')
+rf_mod_fit = rf_mod.fit(x_trn_trns, y_trn)
+
+y_pr_rf = rf_mod_fit.predict(x_tst_trns)
+roc_auc_score(y_tst, y_pr_rf)
+f1_score(y_tst, y_pr_rf)
+# There seems to be mild overfitting using completely random data which ought to have 0 correlation
+a1 = cross_val_score(RandomForestClassifier(), x_trn, y_trn, scoring='roc_auc', cv=5)
+a2 = cross_val_score(RandomForestClassifier(n_estimators=25, max_features='log2', criterion='entropy'), x_trn, y_trn, scoring='roc_auc', cv=5)
+sum(a1)/len(a1) # .525
+sum(a2)/len(a2) # .526
+a3 = cross_val_predict(RandomForestClassifier(), x_trn, y_trn, cv=5)
+roc_auc_score(y_trn, a3)
+
+
+knn.fit(x_trn_trns, y_trn)
+y_pr_knn = knn.predict(x_tst_trns)
+roc_auc_score(y_tst, y_pr_knn) # 0.63872549019607838
+
+'''
 
 '''
 Dimensionality Reduction
@@ -160,21 +441,15 @@ Instead of approaching this problem as finding features to predict cancer (becau
 '''
 
 clf = RandomForestClassifier()
-clf.fit(X_train, y_train)
+clf = clf.fit(X_train, y_train)
 feat_imp = rankFeatures(clf, X_train)
 # selected_feature_indices = pd.Series(feat_imp[:X_new.shape[1]])
 
 rf_model = SelectFromModel(clf) # Not preserving column names or index names
-X_rf_trans = rf_model.fit_transform(X_train, y_train)
+# X_rf_trans = rf_model.fit_transform(X_train, y_train)
 
 
 # TODO: Make the below into a helper function because this obnoxious
-# Transform, cast to DF, find the top features. cast that to a series, find its columns, and rename the DF's columns accordingly.
-# https://github.com/scikit-learn/scikit-learn/issues/6425
-# The idea of preserving feature names across transformers (a get_feature_names) is an ongoing issue that is still unresolved
-# Thinking about it again, there doesn't seem to be a need to save feature names (unless I am personally curious)
-# X_new = pd.DataFrame(model.transform(X_train)).rename(columns=pd.Series(X_train[feat_imp[:X_new.shape[1]]].columns)) # columns
-# X_new.index = y_train.index # indices
 
 # Pickle the transformer
 joblib.dump(rf_model.transform(X_train), 'clf_rf.pkl')
@@ -200,26 +475,96 @@ Running grid_search.fit() takes an obscene amount if time to run.
 '''
 # Pipeline all the steps so far
 # Note: calling fit() on the pipeline does the same thing as fitting, then transforming for the next thing to fit it.
-estimators = [('pca', PCA()), ('clf', rf_model), ('lr', LogisticRegression())]
+estimators = [('pca', PCA()), ('clf', RandomForestClassifier())]
 pipe = Pipeline(estimators)
-pipe.get_params().keys()
+# pipe.get_params().keys()
 # pipe.fit(X_train, y_train)
 # Pick the parameters you want to vary and their values
-params = dict(pca__n_components=[80, 100, X_train.shape[1]],
-         clf__estimator__n_estimators=[10, 25, 50, 100, 200],
-         clf__estimator__max_features=['sqrt', 'log2', 'auto'],
-         clf__estimator__criterion=['entropy', 'gini'],
-         lr__C=[0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24],
-         lr__solver=['sag'],
-         lr__n_jobs=[-1])
+params = dict(clf__n_estimators=[10, 25, 50, 75, 100],
+         clf__max_features=['log2', 'auto', 'sqrt'],
+         pca__n_components=[50, 100, 150, 200])
 
-
-grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc', n_jobs=4)
+#params = dict(clf__n_estimators=[10, 20], pca__n_components=[10, 20])
+# n_components = 100, criterion = entropy
+grid_search = GridSearchCV(pipe, param_grid=params, cv=10, scoring='roc_auc')
 
 # Fit the training data to get the best parameters for it — I don't think we would need to fit the PCA() and RandomForestClassifier() separately then.
+# This is obscenely slow
 grid_search.fit(X_train, y_train)
+# Use Bayesian Optimization instead
+grid_search.best_params_ #
 
-pd.DataFrame(grid_search.cv_results_)
+# estimators: 25, max_features = log2, n_components = 150, criterion = entropy
+grid_search.best_params_
+
+# Transform the data using the best parameters grid_search found
+X_bestfit = grid_search.transform(X_train)
+
+# See how it performs with logistic regression:
+lr = LogisticRegression()
+lr = lr.fit(X_bestfit, y_train)
+
+X_test_trans = grid_search.transform(X_test)
+
+y_lrpred = lr.predict(X_test_trans)
+
+# I think optimizing the parameters did nothing
+roc_auc_score(y_test, y_lrpred)
+f1_score(y_test, y_lrpred)
+
+
+
+
+
+# TODO: This is pretty bad, but what we *might* be able to do is to create nonlinear features from these using something like polynomialfeatures from sklearn, then run that through LR, or maybe even through the PCA/RF then LR.
+# TODO: Use GWAS studies as a benchmark for feature selection and possibly even predictions
+
+
+rf = RandomForestClassifier()
+rf.fit(X_bestfit, y_train)
+
+y_rfpred = rf.predict(X_test_trans)
+roc_auc_score(y_test, y_rfpred)
+f1_score(y_test, y_rfpred)
+
+
+
+
+
+knn = neighbors.KNeighborsClassifier(n_neighbors=5)
+knn.fit(X_bestfit, y_train)
+y_pred_knn = knn.predict(X_test_trans)
+roc_auc_score(y_test, y_pred_knn)
+f1_score(y_test, y_pred)
+
+
+xtemp = knn.transform(X_bestfit)
+
+
+
+def pcacv(n_components):
+    return cross_val_score(PCA(n_components=n_components),
+                           X_train, y_train, scoring='roc_auc', cv=5).mean()
+
+def rfcv(n_estimators, max_features):
+    return cross_val_score(RandomForestClassifier(n_estimators=int(n_estimators), max_features=min(max_features, 0.999)), X_train, y_train, scoring='roc_auc', cv=5).mean()
+
+if __name__ == '__main__':
+    gp_params = {"alpha": 1e5}
+
+    pcaBO = BayesianOptimization(pcacv, {'n_components': (10, 200)})
+    pcaBO.explore({'n_components': [10, 25, 50, 75, 100, 150, 200]})
+
+    pcaBO.maximize(n_iter=10, **gp_params)
+
+
+    rfcBO = BayesianOptimization(rfcv, {'n_estimators': (10, 250),
+                                         'max_features': (0.1, 0.999)})
+
+    pcaBO.maximize(n_iter=10, **gp_params)
+    print('-'*53)
+    rfcBO.maximize(n_iter=10, **gp_params)
+
 
 grid_search.best_estimator_
 grid_search.best_score_
