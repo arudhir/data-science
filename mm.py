@@ -131,11 +131,12 @@ os.chdir(working_directory)
 os.getcwd()
 data = Data.initFromFile("expressions_example.csv", "copynumber_example.csv", "mutations_example.csv", "groundtruth_example.csv")
 
+# Testing purposes only
 exp = data.exp
 cop = data.cop
 mut = data.mut
 labels = data.labels
-
 d2 = Data(exp, cop, mut, labels)
+
 d2.processData()
 X, y = d2.getXY()
